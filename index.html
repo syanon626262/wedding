@@ -628,7 +628,8 @@ const Upload = (function () {
   const RELAY_CHUNK = 8 * 1024 * 1024;    // GAS 中継のときの分割サイズ
   const DIRECT_CHUNK = 32 * 1024 * 1024;  // Drive に直接送るときの分割サイズ
   const MAX_RETRY = 4;
-  const PARALLEL = 3;                     // 同時に送るファイル数
+  // 小さい写真でも Drive 側の保存待ちが1枚3秒ほどあるので　たくさん同時に送って待ち時間を重ねる
+  const PARALLEL = 6;                     // 同時に送るファイル数
   const BATCH = 10;                       // まとめて準備するファイル数
   let batchSupported = true;              // 古い GAS（initUploads なし）なら 1件ずつ準備する
   const DEBUG = /[?&]debug\b/.test(location.search);
@@ -862,7 +863,7 @@ const Upload = (function () {
     };
     return item => {
       const k = Math.floor(list.indexOf(item) / BATCH);
-      start(k); start(k + 1);
+      start(k); start(k + 1); start(k + 2);
       return promises[k] || Promise.resolve();
     };
   }
