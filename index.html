@@ -413,6 +413,7 @@
         </div>
         <div class="album" id="album"></div>
         <p class="albumstate" id="albumState"></p>
+        <pre class="debuglog" id="albumDebug" hidden></pre>
         <div id="albumEnd" aria-hidden="true"></div>
 
         <div id="albumEmpty" class="msg" hidden>
@@ -647,13 +648,53 @@ function span(text, cls) {
    lh3 は Google の画像配信サーバーから直接返るので速い　だめなら Drive のサムネイルに切り替える */
 const thumbUrl = (id, w) => 'https://lh3.googleusercontent.com/d/' + encodeURIComponent(id) + '=w' + w;
 const thumbUrlAlt = (id, w) => 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w' + w;
+/* lh3 が使えない環境では毎回失敗してから切り替えるのは無駄なので　一度失敗したら以後は最初から Drive を使う */
+let lh3Ok = null;
 function setThumb(img, id, w, onFail) {
+  const t0 = performance.now();
+  const done = src => { if (DBG.on) DBG.thumb(src, performance.now() - t0); };
+  if (lh3Ok === false) {
+    img.onload = chain(img.onload, () => done('drive'));
+    img.onerror = onFail;
+    img.src = thumbUrlAlt(id, w);
+    return;
+  }
+  img.onload = chain(img.onload, () => { lh3Ok = true; done('lh3'); });
   img.onerror = () => {
+    if (lh3Ok !== true) lh3Ok = false;
+    img.onload = chain(null, () => done('drive(切替)'));
     img.onerror = onFail;
     img.src = thumbUrlAlt(id, w);
   };
   img.src = thumbUrl(id, w);
 }
+function chain(a, b) { return function (e) { if (a) a.call(this, e); b(); }; }
+
+/* ?debug を付けて開いたときだけ　時間の記録を画面に出す */
+const DBG = (function () {
+  const on = /[?&]debug\b/.test(location.search);
+  let thumbs = [];
+  function log(id, line) {
+    if (!on) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.hidden = false;
+    el.textContent += line + '\n';
+  }
+  return {
+    on: on,
+    log: log,
+    thumb: (src, ms) => {
+      thumbs.push({ src: src, ms: ms });
+      if (thumbs.length === 12) {
+        const avg = thumbs.reduce((s, x) => s + x.ms, 0) / thumbs.length;
+        const srcs = {};
+        thumbs.forEach(x => { srcs[x.src] = (srcs[x.src] || 0) + 1; });
+        log('albumDebug', 'サムネイル12枚  平均 ' + (avg / 1000).toFixed(1) + 's  ' + JSON.stringify(srcs));
+      }
+    },
+  };
+})();
 
 /* =========================================================
    画面の切り替え
@@ -1244,7 +1285,9 @@ const Album = (function () {
     const my = ++gen;
     if (!photos.length) setState('読み込んでいます');
     try {
+      const tl = performance.now();
       const r = await api('list', { fresh: stale });
+      DBG.log('albumDebug', '一覧の取得 ' + ((performance.now() - tl) / 1000).toFixed(1) + 's  ' + r.items.length + '件' + (stale ? '（最新）' : ''));
       if (my !== gen) return;
       stale = false;
       lastFetch = Date.now();
@@ -1333,7 +1376,7 @@ const Album = (function () {
    ========================================================= */
 const Saver = (function () {
   const MAX = 30;       // 一度に保存できる枚数
-  const PARALLEL = 4;
+  const PARALLEL = 6;
   const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -1363,6 +1406,34 @@ const Saver = (function () {
     if ($('viewer').hidden) document.body.classList.remove('locked');
   }
 
+  /* まず Google の画像サーバーから直接もらう（速い）
+     だめな環境なら GAS 経由に切り替える（確実だが遅い） */
+  let directOk = null;
+  async function fetchDirect(p, n) {
+    const res = await fetch('https://lh3.googleusercontent.com/d/' + encodeURIComponent(p.id) + '=s0', { mode: 'cors', credentials: 'omit' });
+    if (!res.ok) throw new Error('status ' + res.status);
+    const blob = await res.blob();
+    if (!/^image\//.test(blob.type) || blob.size < 1000) throw new Error('not image');
+    const ext = /png/.test(blob.type) ? '.png' : '.jpg';
+    return new File([blob], 'Motion_' + (p.guest || 'photo') + '_' + n + ext, { type: blob.type });
+  }
+  async function fetchViaGas(p) {
+    const r = await api('getPhoto', { id: p.id });
+    return new File([b64ToBytes(r.data)], r.name, { type: r.mimeType });
+  }
+  async function fetchOne(p, n) {
+    if (directOk !== false) {
+      try {
+        const f = await fetchDirect(p, n);
+        directOk = true;
+        return { file: f, via: 'direct' };
+      } catch (e) {
+        if (directOk === null) directOk = false;   // 最初から使えない環境
+      }
+    }
+    return { file: await fetchViaGas(p), via: 'gas' };
+  }
+
   async function start(list, done) {
     const my = ++run;
     onDone = done || null;
@@ -1378,20 +1449,26 @@ const Saver = (function () {
     const results = new Array(list.length);
     let count = 0, failed = 0;
     const queue = list.map((p, i) => i);
+    const tAll = performance.now();
     const worker = async () => {
       while (queue.length && my === run) {
         const i = queue.shift();
+        const t0 = performance.now();
         try {
-          const r = await api('getPhoto', { id: list[i].id });
-          results[i] = new File([b64ToBytes(r.data)], r.name, { type: r.mimeType });
+          const r = await fetchOne(list[i], i + 1);
+          results[i] = r.file;
+          DBG.log('albumDebug', '保存 ' + String(i + 1).padStart(2) + '  ' + ((performance.now() - t0) / 1000).toFixed(1) + 's  ' +
+            (r.file.size / 1024 / 1024).toFixed(1) + 'MB  ' + r.via);
         } catch (e) {
           failed++;
+          DBG.log('albumDebug', '保存 ' + String(i + 1).padStart(2) + '  失敗 ' + errText(e));
         }
         count++;
         if (my === run) $('saverText').textContent = count + ' / ' + list.length;
       }
     };
     await Promise.all(Array.from({ length: PARALLEL }, worker));
+    DBG.log('albumDebug', '保存の準備 合計 ' + ((performance.now() - tAll) / 1000).toFixed(1) + 's');
     if (my !== run) return;
 
     files = results.filter(Boolean);
