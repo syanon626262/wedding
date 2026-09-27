@@ -178,6 +178,7 @@
     background: rgba(6, 10, 34, .7); color: #fff;
     font-size: 16px; line-height: 26px; cursor: pointer;
   }
+  .debuglog { font: 11px/1.6 ui-monospace, Menlo, monospace; color: var(--ink-soft); white-space: pre-wrap; margin: 12px 0 0; padding: 10px; background: rgba(0, 0, 0, .3); border-radius: 6px; }
   .pickinfo { text-align: center; font-size: 13.5px; color: var(--ink-soft); margin: 12px 0 0; min-height: 1em; }
   .error { text-align: center; font-size: 14px; color: var(--ng); margin: 12px 0 0; }
   .error:empty { display: none; }
@@ -366,6 +367,7 @@
           <a class="btn" href="#photos" id="toPhotos">みんなの写真を見る</a>
           <button class="btn line" type="button" id="more">続けて送る</button>
         </div>
+        <pre class="debuglog" id="debugLog" hidden></pre>
       </section>
     </main>
 
@@ -865,11 +867,21 @@ const Upload = (function () {
     };
   }
 
+  function dlog(line) {
+    if (!DEBUG) return;
+    const el = $('debugLog');
+    el.hidden = false;
+    el.textContent += line + '\n';
+  }
+  const mb = n => (n / 1024 / 1024).toFixed(1) + 'MB';
+  const sec = ms => (ms / 1000).toFixed(1) + 's';
+
   async function uploadOne(item, planner, who) {
     const file = item.file;
     item.status = 'up';
     item.progress = 0;
     paint(item);
+    const t0 = performance.now();
 
     await planner(item);
     if (item.sessionError) throw item.sessionError;
@@ -881,6 +893,7 @@ const Upload = (function () {
       }, who));
     }
     const uploadId = session.uploadId, uploadUrl = session.uploadUrl;
+    const t1 = performance.now();
 
     let offset = 0;
     while (true) {
@@ -921,6 +934,10 @@ const Upload = (function () {
         item.status = 'done';
         item.progress = 1;
         paint(item);
+        const t2 = performance.now();
+        dlog(file.name.slice(-18).padEnd(18) + ' ' + mb(file.size).padStart(7) +
+          '  準備 ' + sec(t1 - t0).padStart(5) + '  送信 ' + sec(t2 - t1).padStart(5) +
+          '  ' + (file.size / 1024 / 1024 / Math.max((t2 - t1) / 1000, 0.01)).toFixed(1) + 'MB/s  ' + mode);
         return;
       }
       offset = result.next;
@@ -941,6 +958,8 @@ const Upload = (function () {
     queue.forEach(i => { i.status = 'wait'; i.progress = 0; i.session = null; i.sessionError = null; });
     const who = { guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin };
     const planner = sessionPlanner(queue.slice(), who);
+    const tStart = performance.now();
+    dlog('--- ' + queue.length + '件　合計 ' + mb(queue.reduce((s, i) => s + i.file.size, 0)) + ' ---');
     refresh();
 
     const worker = async () => {
@@ -960,6 +979,7 @@ const Upload = (function () {
       }
     };
     await Promise.all(Array.from({ length: PARALLEL }, () => worker()));
+    dlog('--- 合計時間 ' + sec(performance.now() - tStart) + ' ---');
 
     busy = false;
     refresh();
