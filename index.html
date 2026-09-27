@@ -51,7 +51,7 @@
     min-height: calc(100vh - 220px);
     background: linear-gradient(180deg, var(--night) 0%, var(--deep) 22%, var(--blue) 52%, var(--violet) 80%, var(--dusk) 100%);
   }
-  #sky { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; }
+  #sky { position: fixed; left: 0; top: 0; width: 100%; height: 100vh; pointer-events: none; }
 
   .wrap {
     position: relative;
@@ -527,22 +527,28 @@ const Sky = (function () {
     cx.filter = 'none';
   }
 
+  /* 星空は画面の大きさだけのキャンバスに描く（ページの長さに関係なく軽い）
+     彗星はページの上のほうにあるので　スクロールに合わせて一緒に流れていく */
   var cv = document.getElementById('sky'), ctx = cv.getContext('2d');
-  var W, H, stars = [], meteors = [], nextMeteor = 2000;
+  var W = 0, H = 0, stars = [], meteors = [], nextMeteor = 2000, lastDraw = 0;
   function build() {
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = cv.clientWidth; H = cv.clientHeight;
+    W = window.innerWidth;
+    // iPhone のアドレスバーの出入りで作り直さないよう　画面の高さの最大で作っておく
+    H = Math.max(window.innerHeight, (window.screen && screen.height) || 0);
+    cv.style.height = H + 'px';
     cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     stars = [];
     var n = Math.round(W * H / 2200);
     for (var i = 0; i < n; i++) {
-      var y = Math.pow(Math.random(), 1.6) * H;
+      var y = Math.pow(Math.random(), 1.3) * H;
       stars.push({ x: rand(0, W), y: y, r: Math.random() < 0.05 ? rand(1.1, 1.6) : rand(0.3, 0.95),
         ph: rand(0, 6.28), sp: rand(0.5, 1.8), warm: Math.random() < 0.2 });
     }
   }
-  function comet(t) {
-    var hx = W * 0.86, hy = 150, tx = W * -0.2, ty = 520;
+  function comet(t, sy) {
+    var hx = W * 0.86, hy = 150 - sy, tx = W * -0.2, ty = 520 - sy;
+    if (ty < -20) return;   // 画面の外
     var sh = 0.9 + 0.1 * Math.sin(t / 800);
     var g = ctx.createLinearGradient(hx, hy, tx, ty);
     g.addColorStop(0, 'rgba(255,255,255,' + 0.85 * sh + ')');
@@ -559,17 +565,18 @@ const Sky = (function () {
     ctx.fillStyle = halo; ctx.beginPath(); ctx.arc(hx, hy, 12, 0, 6.29); ctx.fill();
   }
   function draw(t) {
+    var sy = window.scrollY || 0;
     ctx.clearRect(0, 0, W, H);
     for (var i = 0; i < stars.length; i++) {
       var s = stars[i];
       var a = reduce ? 0.8 : 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(s.ph + t / 1000 * s.sp));
-      a *= 1 - (s.y / H) * 0.6;
+      a *= 1 - (s.y / H) * 0.5;
       ctx.globalAlpha = a;
       ctx.fillStyle = s.warm ? '#FFE6B8' : '#EEF3FF';
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.29); ctx.fill();
     }
     ctx.globalAlpha = 1;
-    comet(t);
+    comet(t, sy);
     for (var k = meteors.length - 1; k >= 0; k--) {
       var o = meteors[k], p = (t - o.t0) / o.dur;
       if (p >= 1) { meteors.splice(k, 1); continue; }
@@ -580,36 +587,32 @@ const Sky = (function () {
       ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - o.dx * 0.3, y - o.dy * 0.3); ctx.stroke();
     }
   }
+  var calm = false;   // 送信中などは描く回数を減らす
   function tick(t) {
+    requestAnimationFrame(tick);
+    var interval = calm ? 100 : 33;   // 通常は毎秒30回　送信中は10回
+    if (t - lastDraw < interval) return;
+    lastDraw = t;
     if (t > nextMeteor) {
-      var top = window.scrollY || 0, vh = window.innerHeight;
-      meteors.push({ x: rand(W * 0.3, W), y: top + rand(0, vh * 0.5), dx: -rand(160, 260), dy: rand(60, 130), t0: t, dur: rand(700, 1000) });
+      meteors.push({ x: rand(W * 0.3, W), y: rand(0, window.innerHeight * 0.5), dx: -rand(160, 260), dy: rand(60, 130), t0: t, dur: rand(700, 1000) });
       nextMeteor = t + rand(3000, 6500);
     }
     draw(t);
-    requestAnimationFrame(tick);
   }
-  var lastW = 0, lastH = 0;
   function refresh(force) {
-    var w = cv.clientWidth, h = cv.clientHeight;
-    if (!force && w === lastW && h === lastH) return;
-    lastW = w; lastH = h;
+    var w = window.innerWidth, h = Math.max(window.innerHeight, (window.screen && screen.height) || 0);
+    if (!force && w === W && h <= H) return;
     build();
     if (reduce) draw(0);
   }
-  function start() { refresh(true); drawClouds(); }
+  function start() { refresh(false); drawClouds(); }
 
-  start();
+  refresh(true); drawClouds();
   window.addEventListener('resize', start);
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(start);
-  // ページの高さが変わったら星を敷き直す（タブの切り替えや写真の読み込み）
-  var timer = null;
-  if (window.ResizeObserver) {
-    new ResizeObserver(function () { clearTimeout(timer); timer = setTimeout(function () { refresh(false); }, 120); })
-      .observe(document.querySelector('.page'));
-  }
   if (!reduce) requestAnimationFrame(tick);
-  return { refresh: refresh };
+  else window.addEventListener('scroll', function () { draw(0); }, { passive: true });
+  return { refresh: refresh, calm: function (on) { calm = !!on; } };
 })();
 
 /* =========================================================
@@ -735,7 +738,7 @@ const Upload = (function () {
   const DIRECT_CHUNK = 32 * 1024 * 1024;  // Drive に直接送るときの分割サイズ
   const MAX_RETRY = 4;
   // 小さい写真でも Drive 側の保存待ちが1枚3秒ほどあるので　たくさん同時に送って待ち時間を重ねる
-  const PARALLEL = 6;                     // 同時に送るファイル数
+  const PARALLEL = 10;                    // 同時に送るファイル数
   const BATCH = 10;                       // まとめて準備するファイル数
   let batchSupported = true;              // 古い GAS（initUploads なし）なら 1件ずつ準備する
   const DEBUG = /[?&]debug\b/.test(location.search);
@@ -890,7 +893,7 @@ const Upload = (function () {
     $('pass').disabled = busy;
 
     let info = '';
-    if (busy) info = '届けています　' + doneCount + ' / ' + items.length;
+    if (busy) info = progressText(doneCount);
     else if (items.length) info = items.length + '件えらんでいます';
     if (!busy && items.length && !hasName) info += '　お名前を入れてください';
     if (DEBUG) info += '　[' + mode + ']';
@@ -1091,9 +1094,31 @@ const Upload = (function () {
     }
   }
 
+  /* 全体の進み具合と　残り時間の目安 */
+  let sendStart = 0, sendTotal = 0;
+  function progressText(doneCount) {
+    const queued = items.filter(i => i.status === 'up' || i.status === 'wait' || i.status === 'done');
+    const total = queued.length;
+    let text = '届けています　' + doneCount + ' / ' + total;
+    const bytes = queued.reduce((s, i) => s + i.file.size * (i.status === 'done' ? 1 : i.progress || 0), 0);
+    const elapsed = (performance.now() - sendStart) / 1000;
+    if (elapsed > 4 && bytes > 0 && doneCount > 0) {
+      const all = queued.reduce((s, i) => s + i.file.size, 0);
+      // 1枚ごとの保存待ちもあるので　枚数の進みとバイトの進みの遅いほうで見積もる
+      const byCount = elapsed / doneCount * (total - doneCount);
+      const byBytes = elapsed / bytes * (all - bytes);
+      const left = Math.max(byCount, byBytes);
+      text += left < 60 ? '　あと約' + Math.max(5, Math.round(left / 5) * 5) + '秒' : '　あと約' + Math.round(left / 60) + '分';
+    }
+    return text;
+  }
+
   async function sendAll() {
     if (busy) return;
     busy = true;
+    sendStart = performance.now();
+    Sky.calm(true);
+    const ticker = setInterval(() => { if (busy) $('pickInfo').textContent = progressText(items.filter(i => i.status === 'done').length) + (DEBUG ? '　[' + mode + ']' : ''); }, 1000);
     $('upError').textContent = '';
     store('motion.guest', $('guest').value.trim());
 
@@ -1127,6 +1152,8 @@ const Upload = (function () {
     await Promise.all(Array.from({ length: PARALLEL }, () => worker()));
     dlog('--- 合計時間 ' + sec(performance.now() - tStart) + ' ---');
 
+    clearInterval(ticker);
+    Sky.calm(false);
     busy = false;
     refresh();
 
