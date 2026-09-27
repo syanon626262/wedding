@@ -378,8 +378,8 @@
     <!-- ===== 写真を送る ===== -->
     <main id="view-upload" hidden>
       <section class="section">
-        <h2 class="title">写真を送る</h2>
-        <p class="lead"><span class="l">この日に撮ってくださった写真や動画を</span><span class="l">ふたりに届けてください</span></p>
+        <h2 class="title">写真や動画をシェア！</h2>
+        <p class="lead"><span class="l">撮ってくださった写真や動画を</span><span class="l">みんなでシェアしましょう</span></p>
 
         <div id="upLoading" class="msg"><p>読み込んでいます</p></div>
 
@@ -400,16 +400,16 @@
 
           <label class="picker" id="picker">
             <span class="btn line">写真や動画をえらぶ</span>
-            <span class="hint">何回かに分けて追加することもできます</span>
+            <span class="hint">共有のGoogleドライブに保存されます</span>
             <input id="fileInput" type="file" accept="image/*,video/*" multiple>
           </label>
 
           <ul class="picks" id="picks"></ul>
           <p class="pickinfo" id="pickInfo"></p>
 
-          <button class="btn" id="send" type="button" disabled>届ける</button>
+          <button class="btn" id="send" type="button" disabled>シェアする</button>
           <p class="error" id="upError"></p>
-          <p class="note">届け終わるまで　この画面を開いたままにしてください</p>
+          <p class="note">シェアが終わるまで　この画面を開いたままにしてください</p>
         </div>
 
         <div id="upDone" class="msg" hidden>
@@ -426,12 +426,11 @@
     <main id="view-photos" hidden>
       <section class="section">
         <h2 class="title">みんなの写真</h2>
-        <p class="lead"><span class="l">皆さまが届けてくださった写真です</span><span class="l hint">長押しするとまとめて保存できます</span></p>
+        <p class="lead"><span class="l">皆さまがシェアしてくださった写真です</span><span class="l hint">長押しで選択できます</span></p>
 
         <div class="albumhead" id="albumHead">
           <span class="count" id="albumCount"></span>
           <span class="headbtns">
-            <button class="btn line small icononly" type="button" id="reload" aria-label="新しい写真を見る" title="新しい写真を見る">↻</button>
             <button class="btn line small" type="button" id="selectStart">えらんで保存</button>
           </span>
         </div>
@@ -446,7 +445,7 @@
 
         <div id="albumEmpty" class="msg" hidden>
           <h3>まだ写真はありません</h3>
-          <p><span class="l">最初の1枚を</span><span class="l">届けてみませんか</span></p>
+          <p><span class="l">最初の1枚を</span><span class="l">シェアしてみませんか</span></p>
           <a class="btn line" href="#upload">写真を送る</a>
         </div>
       </section>
@@ -470,9 +469,9 @@
     <h3 id="confirmTitle"></h3>
     <ul class="picks" id="confirmPicks"></ul>
     <p class="scrollhint" id="confirmHint" hidden>スクロールするとすべて見られます</p>
-    <p>届けた写真や動画は<br>すぐに「みんなの写真」に並びます</p>
+    <p>シェアした写真や動画は<br>すぐに「みんなの写真」に並びます</p>
     <p class="soft">式にご参加の皆さまが見られます</p>
-    <button class="btn" type="button" id="confirmOk">届ける</button>
+    <button class="btn" type="button" id="confirmOk">シェアする</button>
     <button class="btn line" type="button" id="confirmCancel">えらびなおす</button>
   </div>
 </div>
@@ -677,7 +676,7 @@ async function api(action, params, timeoutMs) {
 function errText(e) {
   const msg = (e && e.message) ? e.message : String(e || '');
   if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return '通信が切れました';
-  return msg.replace(/^Error:\s*/, '') || '届けられませんでした';
+  return msg.replace(/^Error:\s*/, '') || 'シェアできませんでした';
 }
 
 function store(key, value) {
@@ -972,7 +971,7 @@ const Upload = (function () {
     const failed = items.filter(i => i.status === 'err').length;
 
     $('send').disabled = busy || !hasName || !hasPass || pending === 0;
-    $('send').textContent = busy ? '届けています' : (failed && pending ? 'もう一度届ける' : '届ける');
+    $('send').textContent = busy ? 'シェアしています' : (failed && pending ? 'もう一度シェアする' : 'シェアする');
     $('picker').classList.toggle('disabled', busy);
     $('guest').disabled = busy;
     $('pass').disabled = busy;
@@ -989,7 +988,7 @@ const Upload = (function () {
   function openConfirm() {
     const list = sendable();
     if (!list.length) return;
-    $('confirmTitle').textContent = list.length + '件を届けます';
+    $('confirmTitle').textContent = list.length + '件をシェアします';
     const box = $('confirmPicks');
     box.textContent = '';
     list.forEach(item => {
@@ -1048,7 +1047,7 @@ const Upload = (function () {
 
   /* ---- 送り先の準備 ----
      写真を選んだ時点で　裏で GAS に送り先の準備を頼んでおく
-     GAS の返事が遅くても　「届ける」を押すころには終わっているようにするため
+     GAS の返事が遅くても　「シェアする」を押すころには終わっているようにするため
      名前や合言葉が変わったら準備し直す */
   const currentWho = () => ({ guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin });
   const whoKey = who => JSON.stringify(who);
@@ -1213,7 +1212,7 @@ const Upload = (function () {
   function progressText(doneCount) {
     const queued = items.filter(i => i.status === 'up' || i.status === 'wait' || i.status === 'done');
     const total = queued.length;
-    let text = '届けています　' + doneCount + ' / ' + total;
+    let text = 'シェアしています　' + doneCount + ' / ' + total;
     const bytes = queued.reduce((s, i) => s + i.file.size * (i.status === 'done' ? 1 : i.progress || 0), 0);
     const elapsed = (performance.now() - sendStart) / 1000;
     if (elapsed > 4 && bytes > 0 && doneCount > 0) {
@@ -1233,8 +1232,8 @@ const Upload = (function () {
     sendStart = performance.now();
     Sky.calm(true);
     $('send').disabled = true;
-    $('send').textContent = '届けています';
-    $('pickInfo').textContent = '届ける準備をしています';
+    $('send').textContent = 'シェアしています';
+    $('pickInfo').textContent = 'シェアの準備をしています';
     await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // 表示を先に更新してから始める
     const ticker = setInterval(() => { if (busy) $('pickInfo').textContent = progressText(items.filter(i => i.status === 'done').length) + (DEBUG ? '　[' + mode + ']' : ''); }, 1000);
     $('upError').textContent = '';
@@ -1277,11 +1276,11 @@ const Upload = (function () {
 
     const doneCount = items.filter(i => i.status === 'done').length;
     if (failed === 0 && doneCount > 0 && items.every(i => i.status === 'done')) {
-      $('upDoneText').textContent = doneCount + '件　大切に受け取りました';
+      $('upDoneText').textContent = doneCount + '件　シェアしました';
       show('upDone');
       Album.markStale();
     } else if (failed > 0 && !$('upError').textContent) {
-      $('upError').textContent = '届かなかったものがあります　もう一度お試しください';
+      $('upError').textContent = 'シェアできなかったものがあります　もう一度お試しください';
     }
   }
 
@@ -1585,7 +1584,15 @@ const Album = (function () {
     const frag = document.createDocumentFragment();
     fresh.forEach(p => { ids.add(p.id); frag.appendChild(makeTile(p)); });
     photos = fresh.concat(photos);
-    $('album').insertBefore(frag, $('album').firstChild);
+    // 下のほうを見ているときは　上に写真が増えても画面がずれないようにする
+    const album = $('album');
+    let anchor = null, top0 = 0;
+    if (album.getBoundingClientRect().top < 0) {
+      anchor = Array.prototype.find.call(album.children, el => el.getBoundingClientRect().bottom > 0);
+      if (anchor) top0 = anchor.getBoundingClientRect().top;
+    }
+    album.insertBefore(frag, album.firstChild);
+    if (anchor) window.scrollBy(0, anchor.getBoundingClientRect().top - top0);
   }
 
   function saveCache(items) {
@@ -1676,7 +1683,14 @@ const Album = (function () {
 
   restoreCache();
 
-  $('reload').addEventListener('click', () => { stale = true; refreshTop(); });
+  /* 写真を見ている間は　30秒ごとに新しい写真が届いていないか確認する
+     スマホに戻ってきたときや　このタブを開いたときも確認する */
+  setInterval(() => {
+    if (current === 'photos' && !document.hidden && !selecting && $('viewer').hidden) refreshTop();
+  }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && current === 'photos' && !selecting) refreshTop();
+  });
 
   if (window.IntersectionObserver) {
     new IntersectionObserver(entries => {
