@@ -237,9 +237,13 @@
     text-align: center;
   }
   .sheet h3 { font-weight: 500; font-size: 18px; letter-spacing: .08em; margin: 0 0 16px; }
-  .sheet .picks { margin: 0 0 18px; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+  .sheet .picks {
+    margin: 0 0 18px; display: flex; flex-wrap: wrap; justify-content: flex-start; align-content: flex-start; gap: 4px;
+    max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  }
+  .sheet .picks.few { justify-content: center; }
   .sheet .picks .pick { width: calc(25% - 3px); border-radius: 4px; }
-  .sheet .picks .rest { display: grid; place-items: center; font-size: 13px; color: var(--ink-soft); background: rgba(255, 255, 255, .06); }
+  .sheet .scrollhint { font-size: 12.5px; color: var(--ink-soft); margin: -10px 0 14px; }
   .sheet p { margin: 0; }
   .sheet .soft { color: var(--ink-soft); font-size: 13.5px; margin-top: 6px; }
   .sheet .btn { margin-top: 20px; }
@@ -404,6 +408,7 @@
   <div class="panel">
     <h3 id="confirmTitle"></h3>
     <ul class="picks" id="confirmPicks"></ul>
+    <p class="scrollhint" id="confirmHint" hidden>スクロールするとすべて見られます</p>
     <p>届けた写真や動画は<br>すぐに「みんなの写真」に並びます</p>
     <p class="soft">式にご参加の皆さまが見られます</p>
     <button class="btn" type="button" id="confirmOk">届ける</button>
@@ -621,7 +626,10 @@ const Upload = (function () {
   const RELAY_CHUNK = 8 * 1024 * 1024;    // GAS 中継のときの分割サイズ
   const DIRECT_CHUNK = 32 * 1024 * 1024;  // Drive に直接送るときの分割サイズ
   const MAX_RETRY = 4;
-  const PARALLEL = 2;                     // 同時に送るファイル数
+  const PARALLEL = 3;                     // 同時に送るファイル数
+  const BATCH = 10;                       // まとめて準備するファイル数
+  let batchSupported = true;              // 古い GAS（initUploads なし）なら 1件ずつ準備する
+  const DEBUG = /[?&]debug\b/.test(location.search);
 
   // 'direct' = Drive に直接送る / 'relay' = GAS 経由
   // 最初の直接送信が失敗したら　この端末では以後 relay に切り替える
@@ -768,6 +776,7 @@ const Upload = (function () {
     if (busy) info = '届けています　' + doneCount + ' / ' + items.length;
     else if (items.length) info = items.length + '件えらんでいます';
     if (!busy && items.length && !hasName) info += '　お名前を入れてください';
+    if (DEBUG) info += '　[' + mode + ']';
     $('pickInfo').textContent = info;
   }
 
@@ -778,19 +787,15 @@ const Upload = (function () {
     $('confirmTitle').textContent = list.length + '件を届けます';
     const box = $('confirmPicks');
     box.textContent = '';
-    const SHOW = 11;
-    list.slice(0, list.length > SHOW + 1 ? SHOW : SHOW + 1).forEach(item => {
+    list.forEach(item => {
       const li = document.createElement('li');
       li.className = 'pick';
       li.appendChild(makeThumb(item));
       box.appendChild(li);
     });
-    if (list.length > SHOW + 1) {
-      const li = document.createElement('li');
-      li.className = 'pick rest';
-      li.textContent = 'ほか' + (list.length - SHOW) + '件';
-      box.appendChild(li);
-    }
+    box.scrollTop = 0;
+    box.classList.toggle('few', list.length < 4);
+    $('confirmHint').hidden = list.length <= 12;
     $('confirm').hidden = false;
     document.body.classList.add('locked');
     $('confirmOk').focus();
@@ -835,20 +840,46 @@ const Upload = (function () {
     });
   }
 
-  async function uploadOne(item) {
+  /* 送信先の準備を BATCH 件ずつまとめて GAS に頼む（1件ずつ頼むより速い）
+     いま送っているまとまりの次も先回りして準備しておく */
+  function sessionPlanner(list, who) {
+    const batches = [];
+    for (let i = 0; i < list.length; i += BATCH) batches.push(list.slice(i, i + BATCH));
+    const promises = [];
+    const start = k => {
+      if (!batchSupported || k >= batches.length || promises[k]) return;
+      const b = batches[k];
+      promises[k] = api('initUploads', Object.assign({
+        files: b.map(i => ({ name: i.file.name, size: i.file.size, mimeType: i.file.type || '' })),
+      }, who)).then(r => {
+        b.forEach((it, j) => { it.session = r.sessions[j]; });
+      }).catch(e => {
+        if (/リクエストが正しくありません/.test(errText(e))) { batchSupported = false; return; }
+        b.forEach(it => { it.sessionError = e; });
+      });
+    };
+    return item => {
+      const k = Math.floor(list.indexOf(item) / BATCH);
+      start(k); start(k + 1);
+      return promises[k] || Promise.resolve();
+    };
+  }
+
+  async function uploadOne(item, planner, who) {
     const file = item.file;
     item.status = 'up';
     item.progress = 0;
     paint(item);
 
-    const session = await api('initUpload', {
-      name: file.name,
-      size: file.size,
-      mimeType: file.type || '',
-      guestName: $('guest').value.trim(),
-      passcode: $('pass').value.trim(),
-      origin: location.origin,
-    });
+    await planner(item);
+    if (item.sessionError) throw item.sessionError;
+    let session = item.session;
+    if (session && session.error) throw new Error(session.error);
+    if (!session) {
+      session = await api('initUpload', Object.assign({
+        name: file.name, size: file.size, mimeType: file.type || '',
+      }, who));
+    }
     const uploadId = session.uploadId, uploadUrl = session.uploadUrl;
 
     let offset = 0;
@@ -907,14 +938,16 @@ const Upload = (function () {
     let failed = 0;
     let stop = false;
     const queue = sendable();
-    queue.forEach(i => { i.status = 'wait'; i.progress = 0; });
+    queue.forEach(i => { i.status = 'wait'; i.progress = 0; i.session = null; i.sessionError = null; });
+    const who = { guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin };
+    const planner = sessionPlanner(queue.slice(), who);
     refresh();
 
     const worker = async () => {
       while (queue.length && !stop) {
         const item = queue.shift();
         try {
-          await uploadOne(item);
+          await uploadOne(item, planner, who);
         } catch (e) {
           failed++;
           item.status = 'err';
