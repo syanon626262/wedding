@@ -344,7 +344,7 @@
 
           <label class="picker" id="picker">
             <span class="btn line">写真や動画をえらぶ</span>
-            <span class="hint">何枚でもまとめて選べます</span>
+            <span class="hint">何回かに分けて追加することもできます</span>
             <input id="fileInput" type="file" accept="image/*,video/*" multiple>
           </label>
 
@@ -663,7 +663,23 @@ const Upload = (function () {
     }
   }
 
-  /* ---- サムネイル ---- */
+  /* ---- サムネイル ----
+     何十枚も選んだときに端末のメモリが足りなくならないよう
+     画面に近づいたものから順に画像を読み込む */
+  const io = window.IntersectionObserver ? new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      io.unobserve(e.target);
+      e.target.src = e.target.dataset.src;
+    });
+  }, { rootMargin: '400px 0px' }) : null;
+
+  function lazy(el, src) {
+    if (!io) { el.src = src; return; }
+    el.dataset.src = src;
+    io.observe(el);
+  }
+
   function makeThumb(item) {
     const f = item.file;
     if (!item.url) item.url = URL.createObjectURL(f);
@@ -673,14 +689,14 @@ const Upload = (function () {
       v.className = 'thumb';
       v.muted = true; v.playsInline = true; v.preload = 'metadata';
       v.setAttribute('playsinline', '');
-      v.src = item.url + '#t=0.1';
+      lazy(v, item.url + '#t=0.1');
       frag.appendChild(v);
       frag.appendChild(span('動画', 'vbadge'));
     } else if (f.type.indexOf('image/') === 0 || /\.(heic|heif)$/i.test(f.name)) {
       const img = document.createElement('img');
       img.className = 'thumb'; img.alt = ''; img.decoding = 'async';
       img.onerror = () => { img.replaceWith(span('写真', 'ph')); };
-      img.src = item.url;
+      lazy(img, item.url);
       frag.appendChild(img);
     } else {
       frag.appendChild(span('ファイル', 'ph'));
