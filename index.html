@@ -621,16 +621,28 @@ const Sky = (function () {
 const $ = id => document.getElementById(id);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function api(action, params) {
+/* GAS を呼ぶ　返事がないまま待ち続けないよう時間切れを設ける */
+async function api(action, params, timeoutMs) {
   if (!/^https:\/\//.test(API_URL)) throw new Error('準備中です');
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    body: JSON.stringify(Object.assign({ action: action }, params || {})),
-  });
-  if (!res.ok) throw new Error('通信できませんでした（' + res.status + '）');
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || '通信できませんでした');
-  return data.result;
+  const ctrl = window.AbortController ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs || (action === 'uploadChunk' ? 120000 : 40000)) : null;
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      body: JSON.stringify(Object.assign({ action: action }, params || {})),
+      signal: ctrl ? ctrl.signal : undefined,
+    });
+    if (!res.ok) throw new Error('通信できませんでした（' + res.status + '）');
+    let data;
+    try { data = await res.json(); } catch (_) { throw new Error('通信できませんでした（混み合っています）'); }
+    if (!data.ok) throw new Error(data.error || '通信できませんでした');
+    return data.result;
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('時間がかかりすぎています　もう一度お試しください');
+    throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function errText(e) {
@@ -763,19 +775,26 @@ const Upload = (function () {
     if (!configPromise) configPromise = loadConfig();
   }
 
+  /* GAS の返事を待たずにすぐフォームを出す
+     受付期間や合言葉の設定は　返事が来しだい反映する（届かなくても送信時に GAS がチェックする） */
   async function loadConfig() {
-    show('upLoading');
-    try {
-      config = await api('config');
-    } catch (e) {
-      config = null;
-      configPromise = null;
-      $('upClosedTitle').textContent = '読み込めませんでした';
-      $('upClosedText').textContent = '時間をおいてもう一度開いてください';
-      show('upClosed');
-      return;
+    config = { needsPasscode: false, status: 'open', maxFileBytes: 2 * 1024 * 1024 * 1024, assumed: true };
+    show('upForm');
+    refresh();
+    let real = null;
+    for (let i = 0; i < 2 && !real; i++) {
+      const t0 = performance.now();
+      try {
+        real = await api('config', null, 20000);
+        dlog('受付状況の確認 ' + sec(performance.now() - t0));
+      } catch (e) {
+        dlog('受付状況の確認に失敗 ' + errText(e) + ' ' + sec(performance.now() - t0));
+      }
     }
+    if (!real) return;   // 仮の設定のまま使える
+    config = real;
     $('passField').hidden = !config.needsPasscode;
+    if (busy) { refresh(); return; }   // 送っている最中は画面を切り替えない
     if (config.status === 'before') {
       $('upClosedTitle').textContent = 'もう少しお待ちください';
       $('upClosedText').textContent = '受付開始までしばらくお待ちください';
@@ -785,7 +804,6 @@ const Upload = (function () {
       $('upClosedText').textContent = 'たくさんの写真をありがとうございました';
       show('upClosed');
     } else {
-      show('upForm');
       refresh();
     }
   }
