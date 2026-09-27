@@ -189,6 +189,7 @@
   .albumhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
   .albumhead .count { font-size: 13.5px; color: var(--ink-soft); }
   .album { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-inline: -12px; }
+  .tile, .tile img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
   .tile {
     position: relative; display: block; aspect-ratio: 1;
     padding: 0; border: 0; border-radius: 3px; overflow: hidden;
@@ -198,6 +199,7 @@
   .tile img.ok { opacity: 1; }
   .tile .ph { position: absolute; inset: 0; }
   .headbtns { display: flex; gap: 8px; }
+  .lead .hint { font-size: 12.5px; opacity: .8; margin-top: 4px; }
   .album.selecting .tile.video { opacity: .3; cursor: default; }
   .tile .check {
     position: absolute; right: 6px; top: 6px;
@@ -219,7 +221,7 @@
     background: var(--bar); border-top: 1px solid rgba(244, 207, 138, .2);
   }
   .selectbar span { flex: 1; font-size: 14px; }
-  .saver { z-index: 60; }
+  .sheet.saver { z-index: 60; }
   .albumstate { text-align: center; font-size: 13.5px; color: var(--ink-soft); margin: 20px 0 0; min-height: 1em; }
 
   /* ---------- 地平線の夕焼けと雲 ---------- */
@@ -292,7 +294,28 @@
   .viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
   .viewer .stage iframe { width: 100%; height: 100%; border: 0; }
   .viewer .save { color: var(--gold); font-size: 14px; letter-spacing: .08em; text-decoration: none; padding: 8px 4px; }
-  .viewer .nav { display: flex; gap: 10px; }
+  .viewer .stagewrap { position: relative; min-height: 0; }
+  .viewer .stagewrap .stage { position: absolute; inset: 0; }
+  /* 画面の左右の端をタップすると前後の写真へ */
+  .viewer .side {
+    position: absolute; top: 0; bottom: 0; width: 28%;
+    border: 0; padding: 0 10px; background: transparent; color: #fff;
+    display: flex; align-items: center; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .viewer .side.prev { left: 0; justify-content: flex-start; }
+  .viewer .side.next { right: 0; justify-content: flex-end; }
+  .viewer .side span {
+    width: 36px; height: 36px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 22px; line-height: 1;
+    background: rgba(3, 5, 15, .45);
+    opacity: .75; transition: opacity .2s;
+  }
+  .viewer .side:hover span { opacity: 1; }
+  .viewer .side:disabled { visibility: hidden; }
+  .viewer .pos { font-size: 13px; color: var(--ink-soft); letter-spacing: .06em; font-variant-numeric: tabular-nums; }
+  .viewer.video .side { top: 20%; bottom: 20%; width: 18%; }
 
   @media (prefers-reduced-motion: reduce) {
     .btn, .tile img, .pick .bar { transition: none; }
@@ -398,7 +421,7 @@
     <main id="view-photos" hidden>
       <section class="section">
         <h2 class="title">みんなの写真</h2>
-        <p class="lead"><span class="l">皆さまが届けてくださった写真です</span></p>
+        <p class="lead"><span class="l">皆さまが届けてくださった写真です</span><span class="l hint">長押しするとまとめて保存できます</span></p>
 
         <div class="albumhead" id="albumHead">
           <span class="count" id="albumCount"></span>
@@ -473,13 +496,14 @@
     <span class="from" id="viewerFrom"></span>
     <button class="icon" type="button" id="viewerClose" aria-label="閉じる">×</button>
   </div>
-  <div class="stage" id="viewerStage"></div>
+  <div class="stagewrap">
+    <div class="stage" id="viewerStage"></div>
+    <button class="side prev" type="button" id="viewerPrev" aria-label="前の写真"><span>‹</span></button>
+    <button class="side next" type="button" id="viewerNext" aria-label="次の写真"><span>›</span></button>
+  </div>
   <div class="bottom">
     <a class="save" id="viewerSave" href="#" target="_blank" rel="noopener">保存する</a>
-    <div class="nav">
-      <button class="icon" type="button" id="viewerPrev" aria-label="前の写真">‹</button>
-      <button class="icon" type="button" id="viewerNext" aria-label="次の写真">›</button>
-    </div>
+    <span class="pos" id="viewerPos"></span>
   </div>
 </div>
 
@@ -1336,6 +1360,21 @@ const Album = (function () {
     return r;
   }
 
+  /* 長押し（0.45秒）を見分ける　指が動いたらスクロールとみなしてやめる */
+  function attachLongPress(el, fn) {
+    let timer = null, sx = 0, sy = 0;
+    const cancel = () => { clearTimeout(timer); timer = null; };
+    el.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      sx = e.clientX; sy = e.clientY;
+      cancel();
+      timer = setTimeout(() => { timer = null; fn(); }, 450);
+    });
+    el.addEventListener('pointermove', e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
+    ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => el.addEventListener(n, cancel));
+    el.addEventListener('contextmenu', e => e.preventDefault());
+  }
+
   /* ---- えらんで保存 ---- */
   let selecting = false;
   const selected = new Set();
@@ -1406,9 +1445,17 @@ const Album = (function () {
     b.appendChild(span('', 'check'));
     b.dataset.id = p.id;
     b.onclick = () => {
+      if (b._longPressed) { b._longPressed = false; return; }   // 長押しの直後のタップは無視
       if (selecting) { toggle(p, b); return; }
       Viewer.open(photos.findIndex(x => x.id === p.id));
     };
+    attachLongPress(b, () => {
+      if (p.type === 'video') return;
+      b._longPressed = true;
+      if (!selecting) setSelecting(true);
+      if (!selected.has(p.id)) toggle(p, b);
+      if (navigator.vibrate) navigator.vibrate(12);
+    });
     return b;
   }
 
@@ -1675,6 +1722,7 @@ const Saver = (function () {
       $('saverClose').textContent = 'とじる';
       return;
     }
+    if (!canShareFiles(files)) { await download(); return; }   // iPhone 以外はそのままダウンロード
     $('saverTitle').textContent = files.length + '枚の準備ができました';
     $('saverText').textContent = canShareFiles(files) ? '次の画面で「画像を保存」をえらんでください' : '';
     $('saverGo').textContent = canShareFiles(files) ? '写真アプリに保存する' : '保存する';
@@ -1756,6 +1804,8 @@ const Viewer = (function () {
     const save = $('viewerSave');
     save.href = 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(p.id);
     save.onclick = p.type === 'video' ? null : e => { e.preventDefault(); Saver.start([p]); };
+    $('viewer').classList.toggle('video', p.type === 'video');
+    $('viewerPos').textContent = (index + 1) + ' / ' + Album.size() + (Album.hasMore() ? '+' : '');
     $('viewerPrev').disabled = index <= 0;
     $('viewerNext').disabled = index >= Album.size() - 1 && !Album.hasMore();
     if (index >= Album.size() - 3 && Album.hasMore()) Album.more();
@@ -1789,8 +1839,8 @@ const Viewer = (function () {
     if (e.key === 'ArrowRight') step(1);
   });
   let sx = null, sy = null;
-  $('viewerStage').addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
-  $('viewerStage').addEventListener('touchend', e => {
+  $('viewerStage').parentNode.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  $('viewerStage').parentNode.addEventListener('touchend', e => {
     if (sx === null) return;
     const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
     sx = sy = null;
