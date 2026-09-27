@@ -489,6 +489,13 @@
    ========================================================= */
 const API_URL = 'https://script.google.com/macros/s/AKfycbwsD2MxTfQZiNVEcKbQnfTtKJpDVnQ4JUTY2342HA-tiRr5Is_16KfsSV3B4bQiNQgH1g/exec';
 
+/* 写真を見る・保存するときに GAS を通さず Drive に直接聞くための設定（任意）
+   空のままなら GAS 経由で動く
+   DRIVE_API_KEY : Google Cloud で作った API キー
+   FOLDER_ID     : 写真フォルダの ID（Code.gs と同じもの） */
+const DRIVE_API_KEY = 'AIzaSyD5YXxhJXaGNG8tYsAhvBf_8NBTDCYkg4c';
+const FOLDER_ID = '1ep4soi5PT5DipmC1MCXOKjwzoGmvNBxn';
+
 /* =========================================================
    夜空と夕焼けの雲
    ========================================================= */
@@ -1165,6 +1172,46 @@ const Album = (function () {
 
   function setState(text) { $('albumState').textContent = text || ''; }
 
+  /* 一覧の取得　API キーがあれば Drive に直接　なければ GAS */
+  const DIRECT_LIST = !!(DRIVE_API_KEY && FOLDER_ID);
+  const guestFromName = name => { const m = String(name || '').match(/^\d{8}-\d{6}_(.+?)_/); return m ? m[1] : ''; };
+  async function listDirect(pageToken) {
+    const params = new URLSearchParams({
+      q: "'" + FOLDER_ID + "' in parents and trashed = false and (mimeType contains 'image/' or mimeType contains 'video/')",
+      orderBy: 'createdTime desc',
+      pageSize: '60',
+      fields: 'nextPageToken,files(id,name,mimeType)',
+      supportsAllDrives: 'true',
+      includeItemsFromAllDrives: 'true',
+      key: DRIVE_API_KEY,
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const res = await fetch('https://www.googleapis.com/drive/v3/files?' + params, { credentials: 'omit' });
+    if (!res.ok) throw new Error('list ' + res.status);
+    const data = await res.json();
+    return {
+      items: (data.files || []).map(f => ({
+        id: f.id,
+        type: String(f.mimeType).indexOf('video/') === 0 ? 'video' : 'image',
+        guest: guestFromName(f.name),
+        name: String(f.name || '').replace(/^\d{8}-\d{6}_/, ''),
+        mime: f.mimeType,
+      })),
+      next: data.nextPageToken || null,
+      via: 'api',
+    };
+  }
+  let directListOk = DIRECT_LIST;
+  async function listPhotos(req) {
+    if (directListOk) {
+      try { return await listDirect(req.pageToken); }
+      catch (e) { directListOk = false; DBG.log('albumDebug', '直接の一覧に失敗 ' + errText(e) + '　GAS に切り替えます'); }
+    }
+    const r = await api('list', req);
+    r.via = 'gas';
+    return r;
+  }
+
   /* ---- えらんで保存 ---- */
   let selecting = false;
   const selected = new Set();
@@ -1286,8 +1333,8 @@ const Album = (function () {
     if (!photos.length) setState('読み込んでいます');
     try {
       const tl = performance.now();
-      const r = await api('list', { fresh: stale });
-      DBG.log('albumDebug', '一覧の取得 ' + ((performance.now() - tl) / 1000).toFixed(1) + 's  ' + r.items.length + '件' + (stale ? '（最新）' : ''));
+      const r = await listPhotos({ fresh: stale });
+      DBG.log('albumDebug', '一覧の取得 ' + ((performance.now() - tl) / 1000).toFixed(1) + 's  ' + r.items.length + '件  ' + r.via + (stale ? '（最新）' : ''));
       if (my !== gen) return;
       stale = false;
       lastFetch = Date.now();
@@ -1315,7 +1362,7 @@ const Album = (function () {
     const my = ++gen;
     setState('読み込んでいます');
     try {
-      const r = await api('list', { pageToken: next });
+      const r = await listPhotos({ pageToken: next });
       if (my !== gen) return;
       append(r.items);
       next = r.next;
@@ -1415,13 +1462,38 @@ const Saver = (function () {
     const blob = await res.blob();
     if (!/^image\//.test(blob.type) || blob.size < 1000) throw new Error('not image');
     const ext = /png/.test(blob.type) ? '.png' : '.jpg';
-    return new File([blob], 'Motion_' + (p.guest || 'photo') + '_' + n + ext, { type: blob.type });
+    const base = p.name ? p.name.replace(/\.[^.]+$/, '') : 'Motion_' + (p.guest || 'photo') + '_' + n;
+    return new File([blob], base + ext, { type: blob.type });
   }
   async function fetchViaGas(p) {
     const r = await api('getPhoto', { id: p.id });
     return new File([b64ToBytes(r.data)], r.name, { type: r.mimeType });
   }
+  const isHeic = (mime, name) => /hei[cf]/i.test(mime || '') || /\.hei[cf]$/i.test(name || '');
+
+  /* API キーがあれば　元のファイルそのものを Drive から直接もらう（画質も元のまま） */
+  let originalOk = !!DRIVE_API_KEY;
+  async function fetchOriginal(p, n) {
+    const res = await fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(p.id) +
+      '?alt=media&supportsAllDrives=true&key=' + encodeURIComponent(DRIVE_API_KEY), { credentials: 'omit' });
+    if (!res.ok) throw new Error('status ' + res.status);
+    const blob = await res.blob();
+    const type = blob.type || p.mime || 'image/jpeg';
+    if (isHeic(type, p.name)) return null;   // HEIC は JPEG にするため別の取り方に回す
+    const name = p.name || ('Motion_' + (p.guest || 'photo') + '_' + n + (/png/.test(type) ? '.png' : '.jpg'));
+    return new File([blob], name, { type: type });
+  }
+
   async function fetchOne(p, n) {
+    if (originalOk && !isHeic(p.mime, p.name)) {
+      try {
+        const f = await fetchOriginal(p, n);
+        if (f) return { file: f, via: 'original' };
+      } catch (e) {
+        originalOk = false;
+        DBG.log('albumDebug', '元ファイルの取得に失敗 ' + errText(e));
+      }
+    }
     if (directOk !== false) {
       try {
         const f = await fetchDirect(p, n);
