@@ -294,7 +294,9 @@
   }
   .viewer .icon:disabled { opacity: .25; cursor: default; }
   .viewer .stage { position: relative; display: grid; place-items: center; overflow: hidden; touch-action: pan-y; }
-  .viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .viewer .stage img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; transform-origin: 0 0; will-change: transform; }
+  .viewer .stagewrap { touch-action: none; }
+  .viewer.zoomed .side { display: none; }
   .viewer .stage iframe { width: 100%; height: 100%; border: 0; }
   .viewer .save { color: var(--gold); font-size: 14px; letter-spacing: .08em; text-decoration: none; padding: 8px 4px; }
   .viewer .stagewrap { position: relative; min-height: 0; }
@@ -1364,32 +1366,6 @@ const Album = (function () {
   }
 
   /* 長押し（0.45秒）を見分ける　指が動いたらスクロールとみなしてやめる */
-  /* 長押し（0.4秒）を見分ける
-     iPhone は写真を長押しするとプレビューのメニューを出して判定を打ち切るので
-     写真には指が触れないようにし（CSS で pointer-events: none）　タッチは touch イベントで直接見る
-     指が動いたらスクロールとみなしてやめる */
-  function attachLongPress(el, fn) {
-    let timer = null, sx = 0, sy = 0;
-    const cancel = () => { clearTimeout(timer); timer = null; };
-    const begin = (x, y) => {
-      sx = x; sy = y;
-      cancel();
-      timer = setTimeout(() => { timer = null; el._lpAt = Date.now(); fn(); }, 400);
-    };
-    const move = (x, y) => { if (timer && Math.hypot(x - sx, y - sy) > 10) cancel(); };
-    if ('ontouchstart' in window) {
-      el.addEventListener('touchstart', e => { if (e.touches.length === 1) begin(e.touches[0].clientX, e.touches[0].clientY); else cancel(); }, { passive: true });
-      el.addEventListener('touchmove', e => move(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
-      el.addEventListener('touchend', e => { if (el._lpAt && Date.now() - el._lpAt < 800) e.preventDefault(); cancel(); });
-      el.addEventListener('touchcancel', cancel);
-    } else {
-      el.addEventListener('mousedown', e => { if (e.button === 0) begin(e.clientX, e.clientY); });
-      el.addEventListener('mousemove', e => move(e.clientX, e.clientY));
-      ['mouseup', 'mouseleave'].forEach(n => el.addEventListener(n, cancel));
-    }
-    el.addEventListener('contextmenu', e => e.preventDefault());
-  }
-
   /* ---- えらんで保存 ---- */
   let selecting = false;
   const selected = new Set();
@@ -1434,6 +1410,131 @@ const Album = (function () {
   }
 
   $('selectStart').addEventListener('click', () => setSelecting(true));
+
+  /* ---- 長押しして　そのまま指を滑らせて選ぶ（iPhone の写真アプリと同じ） ----
+     長押し（0.4秒）で選び始め　指を離すまで　最初の写真から指の下の写真までをまとめて選ぶ
+     指を戻せば選択も戻る　画面の上下の端に指を持っていくと自動でスクロールする
+     選択モード中は　横に指を滑らせるだけでも選び始められる */
+  const albumEl = $('album');
+  let dragEndedAt = 0;
+  let press = null;   // 指を置いた直後（長押しかスクロールか判定中）
+  let drag = null;    // なぞって選んでいる最中
+  let pt = { x: 0, y: 0 };
+  let scrollRaf = 0;
+
+  const tileAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    const tile = el && el.closest ? el.closest('.tile') : null;
+    return tile && tile.parentNode === albumEl ? tile : null;
+  };
+  const tileIndex = tile => Array.prototype.indexOf.call(albumEl.children, tile);
+
+  function startDrag(tile) {
+    const id = tile.dataset.id;
+    const p = photos.find(x => x.id === id);
+    if (!p || p.type === 'video') { press = null; return; }
+    if (!selecting) setSelecting(true);
+    const idx = tileIndex(tile);
+    drag = { anchor: idx, last: -1, base: new Set(selected), add: !selected.has(id) };
+    press = null;
+    applyRange(idx);
+    if (navigator.vibrate) navigator.vibrate(12);
+    autoScroll();
+  }
+
+  function applyRange(cur) {
+    if (!drag || cur < 0 || cur === drag.last) return;
+    drag.last = cur;
+    const lo = Math.min(drag.anchor, cur), hi = Math.max(drag.anchor, cur);
+    const tiles = albumEl.children;
+    let limited = false;
+    for (let i = 0; i < tiles.length; i++) {
+      const el = tiles[i];
+      if (el.classList.contains('video')) continue;
+      const id = el.dataset.id;
+      let want = i >= lo && i <= hi ? drag.add : drag.base.has(id);
+      if (want && !selected.has(id) && selected.size >= Saver.MAX) { want = false; limited = true; }
+      if (want) selected.add(id); else selected.delete(id);
+      el.classList.toggle('sel', want);
+    }
+    updateSelect();
+    if (limited) $('selectCount').textContent = '一度に' + Saver.MAX + '枚までです';
+  }
+
+  function updateDrag() {
+    if (!drag) return;
+    const tile = tileAt(pt.x, pt.y);
+    if (tile) applyRange(tileIndex(tile));
+  }
+
+  // 画面の上下の端に指があるあいだ　自動でスクロールして選び続ける
+  function autoScroll() {
+    cancelAnimationFrame(scrollRaf);
+    const step = () => {
+      if (!drag) return;
+      const top = 90, bottom = window.innerHeight - 90 - 60;
+      let v = 0;
+      if (pt.y < top) v = -Math.min(18, (top - pt.y) / 4 + 2);
+      else if (pt.y > bottom) v = Math.min(18, (pt.y - bottom) / 4 + 2);
+      if (v) { window.scrollBy(0, v); updateDrag(); }
+      scrollRaf = requestAnimationFrame(step);
+    };
+    scrollRaf = requestAnimationFrame(step);
+  }
+
+  function endDrag() {
+    if (drag) dragEndedAt = Date.now();
+    drag = null;
+    cancelAnimationFrame(scrollRaf);
+  }
+  function cancelPress() { if (press) clearTimeout(press.timer); press = null; }
+
+  function down(x, y) {
+    cancelPress();
+    const tile = tileAt(x, y);
+    if (!tile) return;
+    pt = { x: x, y: y };
+    press = { x: x, y: y, tile: tile, timer: setTimeout(() => { if (press) startDrag(press.tile); }, 400) };
+  }
+  // 戻り値 true のとき　その指の動きをスクロールに使わせない
+  function move(x, y) {
+    pt = { x: x, y: y };
+    if (drag) { updateDrag(); return true; }
+    if (!press) return false;
+    const dx = x - press.x, dy = y - press.y;
+    if (selecting && Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy) * 1.3) {
+      clearTimeout(press.timer);
+      startDrag(press.tile);
+      updateDrag();
+      return true;
+    }
+    if (Math.hypot(dx, dy) > 10) cancelPress();   // スクロールしている
+    return false;
+  }
+  function up(e) {
+    const wasDrag = !!drag;
+    cancelPress();
+    endDrag();
+    if (wasDrag && e && e.cancelable) e.preventDefault();   // 指を離したときのタップ扱いを止める
+  }
+
+  if ('ontouchstart' in window) {
+    albumEl.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) { cancelPress(); endDrag(); return; }
+      down(e.touches[0].clientX, e.touches[0].clientY);
+    }, { passive: true });
+    albumEl.addEventListener('touchmove', e => {
+      if (e.touches.length !== 1) return;
+      if (move(e.touches[0].clientX, e.touches[0].clientY) && e.cancelable) e.preventDefault();
+    }, { passive: false });
+    albumEl.addEventListener('touchend', up, { passive: false });
+    albumEl.addEventListener('touchcancel', () => { cancelPress(); endDrag(); });
+  } else {
+    albumEl.addEventListener('mousedown', e => { if (e.button === 0) { e.preventDefault(); down(e.clientX, e.clientY); } });
+    window.addEventListener('mousemove', e => { if (drag || press) move(e.clientX, e.clientY); });
+    window.addEventListener('mouseup', e => { if (drag || press) up(e); });
+  }
+  albumEl.addEventListener('contextmenu', e => e.preventDefault());
   $('selectCancel').addEventListener('click', () => setSelecting(false));
   $('selectAll').addEventListener('click', selectAll);
   $('selectSave').addEventListener('click', () => {
@@ -1460,16 +1561,10 @@ const Album = (function () {
     b.appendChild(span('', 'check'));
     b.dataset.id = p.id;
     b.onclick = () => {
-      if (b._lpAt && Date.now() - b._lpAt < 800) return;   // 長押しの直後のタップは無視
+      if (Date.now() - dragEndedAt < 700) return;   // 長押しやなぞり選択の直後のタップは無視
       if (selecting) { toggle(p, b); return; }
       Viewer.open(photos.findIndex(x => x.id === p.id));
     };
-    attachLongPress(b, () => {
-      if (p.type === 'video') return;
-      if (!selecting) setSelecting(true);
-      if (!selected.has(p.id)) toggle(p, b);
-      if (navigator.vibrate) navigator.vibrate(12);
-    });
     return b;
   }
 
@@ -1788,6 +1883,135 @@ const Saver = (function () {
 })();
 
 /* =========================================================
+   写真の拡大　ピンチ・ダブルタップ（パソコンはホイール・ダブルクリック）
+   拡大中は指でなぞって動かせる　拡大中は左右のタップやスワイプで写真を移らない
+   ========================================================= */
+const Zoom = (function () {
+  const MAX = 5;
+  let img = null, id = null, s = 1, tx = 0, ty = 0, hiLoaded = false, wasPinch = false;
+  let g = null;         // 指の状態
+  let lastTap = 0;
+
+  const wrap = () => $('viewerStage').parentNode;
+
+  function apply() {
+    if (!img) return;
+    img.style.transform = s === 1 ? '' : 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
+    $('viewer').classList.toggle('zoomed', s > 1.01);
+    // 拡大したら　より細かい画像に差し替える
+    if (s > 1.5 && !hiLoaded && id) {
+      hiLoaded = true;
+      const cur = img, hi = new Image();
+      hi.onload = () => { if (img === cur) cur.src = hi.src; };
+      setThumb(hi, id, 4000, () => {});
+    }
+  }
+
+  // 画像が枠からはみ出しすぎないように位置を制限する
+  function clamp() {
+    if (!img) return;
+    const r = img.getBoundingClientRect();   // 変形後
+    const w0 = r.width / s, h0 = r.height / s;
+    const left0 = r.left - tx, top0 = r.top - ty;  // 変形前の位置
+    const box = wrap().getBoundingClientRect();
+    const w = w0 * s, h = h0 * s;
+    const minX = w > box.width ? box.right - w - left0 : box.left + (box.width - w) / 2 - left0;
+    const maxX = w > box.width ? box.left - left0 : minX;
+    const minY = h > box.height ? box.bottom - h - top0 : box.top + (box.height - h) / 2 - top0;
+    const maxY = h > box.height ? box.top - top0 : minY;
+    tx = Math.min(maxX, Math.max(minX, tx));
+    ty = Math.min(maxY, Math.max(minY, ty));
+  }
+
+  // 画面上の点 (cx, cy) を中心に倍率を newS にする
+  function zoomAt(newS, cx, cy) {
+    if (!img) return;
+    newS = Math.max(1, Math.min(MAX, newS));
+    const r = img.getBoundingClientRect();
+    const left0 = r.left - tx, top0 = r.top - ty;
+    const px = (cx - left0 - tx) / s, py = (cy - top0 - ty) / s;   // 画像上の点
+    s = newS;
+    tx = cx - left0 - px * s;
+    ty = cy - top0 - py * s;
+    if (s === 1) { tx = 0; ty = 0; }
+    apply(); clamp(); apply();
+  }
+
+  function reset() { s = 1; tx = 0; ty = 0; g = null; wasPinch = false; if (img) img.style.transform = ''; $('viewer').classList.remove('zoomed'); }
+
+  function attach(el, fileId) { img = el; id = fileId; hiLoaded = false; reset(); }
+
+  const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+  const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+
+  function onStart(e) {
+    if (!img || $('viewer').classList.contains('video')) return;
+    if (e.touches.length === 2) {
+      wasPinch = true;
+      const m = mid(e.touches[0], e.touches[1]);
+      g = { type: 'pinch', d0: dist(e.touches[0], e.touches[1]), s0: s, mx: m.x, my: m.y };
+    } else if (e.touches.length === 1) {
+      if (e.target.closest && e.target.closest('.side') && s <= 1.01) return;   // 左右のタップ移動はそのまま
+      const t = e.touches[0];
+      const now = Date.now();
+      if (now - lastTap < 300) {   // ダブルタップ
+        lastTap = 0;
+        zoomAt(s > 1.01 ? 1 : 2.5, t.clientX, t.clientY);
+        g = null;
+        e.preventDefault();
+        return;
+      }
+      lastTap = now;
+      wasPinch = false;
+      g = s > 1.01 ? { type: 'pan', x: t.clientX, y: t.clientY, tx0: tx, ty0: ty } : null;
+    }
+  }
+  function onMove(e) {
+    if (!g) return;
+    e.preventDefault();
+    if (g.type === 'pinch' && e.touches.length === 2) {
+      const m = mid(e.touches[0], e.touches[1]);
+      zoomAt(g.s0 * dist(e.touches[0], e.touches[1]) / g.d0, m.x, m.y);
+    } else if (g.type === 'pan' && e.touches.length === 1) {
+      tx = g.tx0 + e.touches[0].clientX - g.x;
+      ty = g.ty0 + e.touches[0].clientY - g.y;
+      clamp(); apply();
+    }
+  }
+  function onEnd(e) {
+    if (e.touches.length === 1 && s > 1.01) {
+      const t = e.touches[0];
+      g = { type: 'pan', x: t.clientX, y: t.clientY, tx0: tx, ty0: ty };
+    } else if (e.touches.length === 0) {
+      g = null;
+      if (s < 1.05) reset();
+    }
+  }
+
+  const w = wrap();
+  w.addEventListener('touchstart', onStart, { passive: false });
+  w.addEventListener('touchmove', onMove, { passive: false });
+  w.addEventListener('touchend', onEnd);
+  w.addEventListener('touchcancel', () => { g = null; });
+  // iPhone の Safari がページごと拡大しないように
+  document.addEventListener('gesturestart', e => { if (!$('viewer').hidden) e.preventDefault(); });
+
+  // パソコン
+  w.addEventListener('wheel', e => {
+    if (!img || $('viewer').classList.contains('video')) return;
+    e.preventDefault();
+    zoomAt(s * Math.exp(-e.deltaY / 300), e.clientX, e.clientY);
+  }, { passive: false });
+  w.addEventListener('dblclick', e => { if (img && !(e.target.closest && e.target.closest('.side'))) zoomAt(s > 1.01 ? 1 : 2.5, e.clientX, e.clientY); });
+  let md = null;
+  w.addEventListener('mousedown', e => { if (s > 1.01 && e.button === 0) { md = { x: e.clientX, y: e.clientY, tx0: tx, ty0: ty }; e.preventDefault(); } });
+  window.addEventListener('mousemove', e => { if (md) { tx = md.tx0 + e.clientX - md.x; ty = md.ty0 + e.clientY - md.y; clamp(); apply(); } });
+  window.addEventListener('mouseup', () => { md = null; });
+
+  return { attach: attach, reset: reset, active: () => s > 1.01, pinched: () => wasPinch };
+})();
+
+/* =========================================================
    写真を大きく見る
    ========================================================= */
 const Viewer = (function () {
@@ -1798,6 +2022,7 @@ const Viewer = (function () {
     if (!p) return;
     const stage = $('viewerStage');
     stage.textContent = '';
+    Zoom.reset();
     if (p.type === 'video') {
       const f = document.createElement('iframe');
       f.src = 'https://drive.google.com/file/d/' + encodeURIComponent(p.id) + '/preview';
@@ -1808,6 +2033,8 @@ const Viewer = (function () {
     } else {
       const img = document.createElement('img');
       img.alt = '';
+      img.draggable = false;
+      Zoom.attach(img, p.id);
       setThumb(img, p.id, 400, () => {});        // まず小さい画像をすぐ出す
       const big = new Image();
       big.onload = () => { if (Album.get(index) === p) { img.onerror = null; img.src = big.src; } };
@@ -1853,9 +2080,12 @@ const Viewer = (function () {
     if (e.key === 'ArrowRight') step(1);
   });
   let sx = null, sy = null;
-  $('viewerStage').parentNode.addEventListener('touchstart', e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  $('viewerStage').parentNode.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1 || Zoom.active()) { sx = sy = null; return; }
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+  }, { passive: true });
   $('viewerStage').parentNode.addEventListener('touchend', e => {
-    if (sx === null) return;
+    if (sx === null || Zoom.active() || Zoom.pinched()) { sx = sy = null; return; }
     const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
     sx = sy = null;
     if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
