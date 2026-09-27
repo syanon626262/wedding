@@ -197,6 +197,29 @@
   .tile img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .4s; }
   .tile img.ok { opacity: 1; }
   .tile .ph { position: absolute; inset: 0; }
+  .headbtns { display: flex; gap: 8px; }
+  .album.selecting .tile.video { opacity: .3; cursor: default; }
+  .tile .check {
+    position: absolute; right: 6px; top: 6px;
+    width: 24px; height: 24px; border-radius: 50%;
+    border: 1.5px solid rgba(255, 255, 255, .9); background: rgba(6, 10, 34, .35);
+    display: none; place-items: center;
+    font-size: 13px; line-height: 1; color: var(--gold-ink);
+  }
+  .album.selecting .tile:not(.video) .check { display: grid; }
+  .tile.sel .check { background: var(--gold); border-color: var(--gold); }
+  .tile.sel .check::before { content: "✓"; }
+  .tile.sel::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--gold); border-radius: 3px; pointer-events: none; }
+  body.selecting .tabbar { visibility: hidden; }
+  .selectbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    min-height: var(--tab-h);
+    background: var(--bar); border-top: 1px solid rgba(244, 207, 138, .2);
+  }
+  .selectbar span { flex: 1; font-size: 14px; }
+  .saver { z-index: 60; }
   .albumstate { text-align: center; font-size: 13.5px; color: var(--ink-soft); margin: 20px 0 0; min-height: 1em; }
 
   /* ---------- 地平線の夕焼けと雲 ---------- */
@@ -377,9 +400,16 @@
         <h2 class="title">みんなの写真</h2>
         <p class="lead"><span class="l">皆さまが届けてくださった写真です</span></p>
 
-        <div class="albumhead">
+        <div class="albumhead" id="albumHead">
           <span class="count" id="albumCount"></span>
-          <button class="btn line small" type="button" id="reload">新しい写真を見る</button>
+          <span class="headbtns">
+            <button class="btn line small" type="button" id="reload">新しい写真を見る</button>
+            <button class="btn line small" type="button" id="selectStart">えらんで保存</button>
+          </span>
+        </div>
+        <div class="albumhead" id="selectHead" hidden>
+          <span class="count">保存する写真をえらんでください</span>
+          <button class="btn line small" type="button" id="selectAll">すべてえらぶ</button>
         </div>
         <div class="album" id="album"></div>
         <p class="albumstate" id="albumState"></p>
@@ -415,6 +445,24 @@
     <p class="soft">式にご参加の皆さまが見られます</p>
     <button class="btn" type="button" id="confirmOk">届ける</button>
     <button class="btn line" type="button" id="confirmCancel">えらびなおす</button>
+  </div>
+</div>
+
+<!-- えらんで保存のときの下のバー -->
+<div class="selectbar" id="selectBar" hidden>
+  <span id="selectCount">0枚</span>
+  <button class="btn line small" type="button" id="selectCancel">やめる</button>
+  <button class="btn small" type="button" id="selectSave" disabled>保存する</button>
+</div>
+
+<!-- 保存の準備 -->
+<div class="sheet saver" id="saver" role="dialog" aria-modal="true" aria-labelledby="saverTitle" hidden>
+  <div class="panel">
+    <h3 id="saverTitle"></h3>
+    <p id="saverText"></p>
+    <p class="soft" id="saverNote"></p>
+    <button class="btn" type="button" id="saverGo" hidden></button>
+    <button class="btn line" type="button" id="saverClose">やめる</button>
   </div>
 </div>
 
@@ -624,7 +672,7 @@ function go(name) {
   });
   if (changed) window.scrollTo(0, 0);
   if (name === 'upload') Upload.enter();
-  if (name === 'photos') Album.enter();
+  if (name === 'photos') Album.enter(); else Album.leave();
   Sky.refresh(false);
 }
 
@@ -1076,6 +1124,57 @@ const Album = (function () {
 
   function setState(text) { $('albumState').textContent = text || ''; }
 
+  /* ---- えらんで保存 ---- */
+  let selecting = false;
+  const selected = new Set();
+
+  function setSelecting(on) {
+    selecting = on;
+    selected.clear();
+    document.querySelectorAll('.tile.sel').forEach(el => el.classList.remove('sel'));
+    $('album').classList.toggle('selecting', on);
+    document.body.classList.toggle('selecting', on);
+    $('albumHead').hidden = on;
+    $('selectHead').hidden = !on;
+    $('selectBar').hidden = !on;
+    updateSelect();
+  }
+
+  function toggle(p, el) {
+    if (p.type === 'video') return;
+    if (selected.has(p.id)) { selected.delete(p.id); el.classList.remove('sel'); }
+    else {
+      if (selected.size >= Saver.MAX) { $('selectCount').textContent = '一度に' + Saver.MAX + '枚までです'; return; }
+      selected.add(p.id); el.classList.add('sel');
+    }
+    updateSelect();
+  }
+
+  function updateSelect() {
+    $('selectCount').textContent = selected.size + '枚';
+    $('selectSave').disabled = selected.size === 0;
+    const images = photos.filter(p => p.type !== 'video');
+    const all = images.length > 0 && images.slice(0, Saver.MAX).every(p => selected.has(p.id));
+    $('selectAll').textContent = all ? 'えらびなおす' : 'すべてえらぶ';
+  }
+
+  function selectAll() {
+    const images = photos.filter(p => p.type !== 'video').slice(0, Saver.MAX);
+    const all = images.length > 0 && images.every(p => selected.has(p.id));
+    selected.clear();
+    if (!all) images.forEach(p => selected.add(p.id));
+    document.querySelectorAll('#album .tile').forEach(el => el.classList.toggle('sel', selected.has(el.dataset.id)));
+    updateSelect();
+  }
+
+  $('selectStart').addEventListener('click', () => setSelecting(true));
+  $('selectCancel').addEventListener('click', () => setSelecting(false));
+  $('selectAll').addEventListener('click', selectAll);
+  $('selectSave').addEventListener('click', () => {
+    const list = photos.filter(p => selected.has(p.id));
+    if (list.length) Saver.start(list, () => setSelecting(false));
+  });
+
   function updateCount() {
     $('albumCount').textContent = photos.length ? photos.length + (next ? '件以上' : '件') : '';
     $('albumEmpty').hidden = !loaded || photos.length > 0;
@@ -1091,8 +1190,13 @@ const Album = (function () {
     img.onload = () => img.classList.add('ok');
     setThumb(img, p.id, 400, () => { img.remove(); b.insertBefore(span(p.type === 'video' ? '動画' : '準備中', 'ph'), b.firstChild); });
     b.appendChild(img);
-    if (p.type === 'video') b.appendChild(span('動画', 'vbadge'));
-    b.onclick = () => Viewer.open(photos.findIndex(x => x.id === p.id));
+    if (p.type === 'video') { b.classList.add('video'); b.appendChild(span('動画', 'vbadge')); }
+    b.appendChild(span('', 'check'));
+    b.dataset.id = p.id;
+    b.onclick = () => {
+      if (selecting) { toggle(p, b); return; }
+      Viewer.open(photos.findIndex(x => x.id === p.id));
+    };
     return b;
   }
 
@@ -1212,6 +1316,7 @@ const Album = (function () {
 
   return {
     enter: enter,
+    leave: () => { if (selecting) setSelecting(false); },
     prefetch: prefetch,
     markStale: () => { stale = true; },
     get: i => photos[i],
@@ -1219,6 +1324,132 @@ const Album = (function () {
     hasMore: () => !!next,
     more: loadMore,
   };
+})();
+
+/* =========================================================
+   写真の保存
+   iPhone は共有シートから写真アプリにまとめて保存
+   それ以外は1枚ずつ続けてダウンロード
+   ========================================================= */
+const Saver = (function () {
+  const MAX = 30;       // 一度に保存できる枚数
+  const PARALLEL = 4;
+  const isIOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+  let files = [];
+  let run = 0;
+  let onDone = null;
+
+  function b64ToBytes(b64) {
+    const bin = atob(b64);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function canShareFiles(list) {
+    try { return isIOS && !!navigator.canShare && navigator.canShare({ files: list }); } catch (_) { return false; }
+  }
+
+  function open() {
+    $('saver').hidden = false;
+    document.body.classList.add('locked');
+  }
+  function close() {
+    run++;
+    files = [];
+    $('saver').hidden = true;
+    if ($('viewer').hidden) document.body.classList.remove('locked');
+  }
+
+  async function start(list, done) {
+    const my = ++run;
+    onDone = done || null;
+    files = [];
+    list = list.filter(p => p.type !== 'video').slice(0, MAX);
+    $('saverTitle').textContent = '保存の準備をしています';
+    $('saverText').textContent = '0 / ' + list.length;
+    $('saverNote').textContent = '';
+    $('saverGo').hidden = true;
+    $('saverClose').textContent = 'やめる';
+    open();
+
+    const results = new Array(list.length);
+    let count = 0, failed = 0;
+    const queue = list.map((p, i) => i);
+    const worker = async () => {
+      while (queue.length && my === run) {
+        const i = queue.shift();
+        try {
+          const r = await api('getPhoto', { id: list[i].id });
+          results[i] = new File([b64ToBytes(r.data)], r.name, { type: r.mimeType });
+        } catch (e) {
+          failed++;
+        }
+        count++;
+        if (my === run) $('saverText').textContent = count + ' / ' + list.length;
+      }
+    };
+    await Promise.all(Array.from({ length: PARALLEL }, worker));
+    if (my !== run) return;
+
+    files = results.filter(Boolean);
+    $('saverNote').textContent = failed ? failed + '枚は保存できませんでした' : '';
+    if (!files.length) {
+      $('saverTitle').textContent = '保存できませんでした';
+      $('saverText').textContent = '時間をおいてもう一度お試しください';
+      $('saverClose').textContent = 'とじる';
+      return;
+    }
+    $('saverTitle').textContent = files.length + '枚の準備ができました';
+    $('saverText').textContent = canShareFiles(files) ? '次の画面で「画像を保存」をえらんでください' : '';
+    $('saverGo').textContent = canShareFiles(files) ? '写真アプリに保存する' : '保存する';
+    $('saverGo').hidden = false;
+    $('saverGo').focus();
+  }
+
+  async function go() {
+    if (!files.length) return;
+    if (canShareFiles(files)) {
+      try {
+        await navigator.share({ files: files });
+        finish();
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;   // 共有シートを閉じただけ
+        await download();
+      }
+      return;
+    }
+    await download();
+  }
+
+  async function download() {
+    $('saverGo').hidden = true;
+    for (let i = 0; i < files.length; i++) {
+      const url = URL.createObjectURL(files[i]);
+      const a = document.createElement('a');
+      a.href = url; a.download = files[i].name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      $('saverText').textContent = (i + 1) + ' / ' + files.length;
+      await sleep(350);
+    }
+    finish();
+  }
+
+  function finish() {
+    $('saverTitle').textContent = '保存しました';
+    $('saverText').textContent = '';
+    $('saverGo').hidden = true;
+    $('saverClose').textContent = 'とじる';
+    if (onDone) { onDone(); onDone = null; }
+  }
+
+  $('saverGo').addEventListener('click', go);
+  $('saverClose').addEventListener('click', close);
+
+  return { MAX: MAX, start: start };
 })();
 
 /* =========================================================
@@ -1249,7 +1480,9 @@ const Viewer = (function () {
       stage.appendChild(img);
     }
     $('viewerFrom').textContent = p.guest ? p.guest + 'さんより' : '';
-    $('viewerSave').href = 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(p.id);
+    const save = $('viewerSave');
+    save.href = 'https://drive.google.com/uc?export=download&id=' + encodeURIComponent(p.id);
+    save.onclick = p.type === 'video' ? null : e => { e.preventDefault(); Saver.start([p]); };
     $('viewerPrev').disabled = index <= 0;
     $('viewerNext').disabled = index >= Album.size() - 1 && !Album.hasMore();
     if (index >= Album.size() - 3 && Album.hasMore()) Album.more();
