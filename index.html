@@ -18,8 +18,6 @@
     --dusk: #6A4C98;
     --rose: #E38C8C;
     --amber: #FBC27A;
-    --h2: #A45E9A;
-    --h5: #FFD9A0;
     --ink: #F6F2EA;
     --ink-soft: #C9C6DD;
     --logo-ink: #FFF8EE;
@@ -129,7 +127,6 @@
   .msg h3 { font-weight: 500; font-size: 19px; letter-spacing: .08em; margin: 0 0 10px; }
   .msg p { margin: 0; color: var(--ink-soft); }
   .msg .btn { margin-top: 24px; }
-  .msg .stars { color: var(--gold); margin-top: 6px; font-size: 14px; }
   .msg .btn + .btn { margin-top: 12px; }
 
   /* ---------- 写真を送る ---------- */
@@ -249,10 +246,10 @@
   .horizon {
     position: relative;
     height: calc(220px + var(--tab-h) + env(safe-area-inset-bottom, 0px));
-    background: linear-gradient(180deg, var(--dusk) 0%, var(--h2) 26%, var(--rose) 50%, var(--amber) 76%, var(--h5) 100%);
+    background: linear-gradient(180deg, var(--dusk) 0%, #A45E9A 26%, var(--rose) 50%, var(--amber) 76%, #FFD9A0 100%);
     overflow: hidden;
   }
-  #clouds { position: absolute; left: 0; top: 0; width: 100%; height: 220px; transition: opacity 2s; }
+  #clouds { position: absolute; left: 0; top: 0; width: 100%; height: 220px; }
 
   /* ---------- 下のタブ ---------- */
   .tabbar {
@@ -316,18 +313,16 @@
   .progress p { margin: 0; }
   .progress .ptitle { font-size: 17px; letter-spacing: .1em; }
   .progress .ppct { font-size: 34px; line-height: 1.3; color: var(--gold); margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
-  /* 砂時計　上の砂が減って下にたまっていく */
-  .progress .hourglass { display: block; width: 84px; height: auto; margin: 10px auto 12px; overflow: visible; }
-  .hourglass .glass { fill: none; stroke: rgba(246, 242, 234, .75); stroke-width: 1.6; stroke-linecap: round; }
-  .hourglass .cap { fill: var(--gold); }
-  .hourglass rect { transition: transform .6s ease-out; }
-  .hourglass .stream { stroke: #F2C98A; stroke-width: 1.6; stroke-dasharray: 2 3; animation: fall .5s linear infinite; }
-  .hourglass .stream.off { opacity: 0; }
-  @keyframes fall { to { stroke-dashoffset: -5; } }
+  .progress .gauge { height: 10px; border-radius: 999px; background: rgba(255, 255, 255, .12); overflow: hidden; margin: 12px 0 14px; }
+  .progress .gauge i {
+    display: block; height: 100%; width: 0; border-radius: 999px;
+    background: linear-gradient(90deg, #E9A86A, var(--gold));
+    transition: width .5s ease-out;
+  }
   .progress .pcount { font-size: 14px; font-variant-numeric: tabular-nums; }
   .progress .pleft { font-size: 14px; color: var(--ink-soft); margin-top: 2px; }
   .progress .pnote { font-size: 12px; color: var(--ink-soft); opacity: .8; margin-top: 16px; }
-  @media (prefers-reduced-motion: reduce) { .hourglass rect { transition: none; } .hourglass .stream { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .progress .gauge i { transition: none; } }
 
   /* ---------- 写真を大きく見る ---------- */
   .viewer { position: fixed; inset: 0; z-index: 50; background: #03050F; display: grid; grid-template-rows: auto 1fr auto; }
@@ -466,7 +461,6 @@
         <div id="upDone" class="msg" hidden>
           <h3>ありがとうございます</h3>
           <p id="upDoneText"></p>
-          <p class="stars" id="upDoneStars"></p>
           <a class="btn" href="#photos" id="toPhotos">みんなの写真を見る</a>
           <button class="btn line" type="button" id="more">続けて送る</button>
         </div>
@@ -478,7 +472,7 @@
     <main id="view-photos" hidden>
       <section class="section">
         <h2 class="title">みんなの写真</h2>
-        <p class="lead"><span class="l">皆さまがシェアしてくださった写真です</span><span class="l hint">夜空の星はシェアされた写真の数だけ灯ります</span></p>
+        <p class="lead"><span class="l">皆さまがシェアしてくださった写真です</span></p>
 
         <section class="ranking" id="ranking" aria-labelledby="rankTitle" hidden>
           <h3 id="rankTitle">シェア数ランキング</h3>
@@ -560,22 +554,7 @@
   <div class="panel">
     <p class="ptitle">シェアしています</p>
     <p class="ppct" id="progPct">0%</p>
-    <svg class="hourglass" viewBox="0 0 90 132" aria-hidden="true">
-      <defs>
-        <clipPath id="hgTop"><path d="M21 12 L69 12 C69 40 49 54 45.6 66 L44.4 66 C41 54 21 40 21 12 Z"/></clipPath>
-        <clipPath id="hgBottom"><path d="M44.4 66 L45.6 66 C49 78 69 92 69 120 L21 120 C21 92 41 78 44.4 66 Z"/></clipPath>
-        <linearGradient id="hgSand" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stop-color="#F7D99A"/>
-          <stop offset="1" stop-color="#E3A866"/>
-        </linearGradient>
-      </defs>
-      <g clip-path="url(#hgTop)"><rect id="hgTopSand" x="15" y="24" width="60" height="42" fill="url(#hgSand)"/></g>
-      <g clip-path="url(#hgBottom)"><rect id="hgBottomSand" x="15" y="70" width="60" height="50" fill="url(#hgSand)"/></g>
-      <line id="hgStream" class="stream" x1="45" y1="66" x2="45" y2="119"/>
-      <path class="glass" d="M21 12 C21 40 41 54 44.4 66 C41 78 21 92 21 120 M69 12 C69 40 49 54 45.6 66 C49 78 69 92 69 120"/>
-      <rect class="cap" x="13" y="6" width="64" height="5" rx="2.5"/>
-      <rect class="cap" x="13" y="121" width="64" height="5" rx="2.5"/>
-    </svg>
+    <div class="gauge"><i id="gaugeBar"></i></div>
     <p class="pcount" id="progCount"></p>
     <p class="pleft" id="progLeft"></p>
     <p class="pnote">終わるまで<br>この画面を開いたままお待ちください</p>
@@ -611,12 +590,6 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwsD2MxTfQZiNVEcKbQnfTt
    FOLDER_ID     : 写真フォルダの ID（Code.gs と同じもの） */
 const DRIVE_API_KEY = 'AIzaSyD5YXxhJXaGNG8tYsAhvBf_8NBTDCYkg4c';
 const FOLDER_ID = '1ep4soi5PT5DipmC1MCXOKjwzoGmvNBxn';
-
-/* 当日の空の移り変わり（日本時間）
-   SKY_FROM までは夕暮れ　SKY_TO で夜になる　そのあいだは少しずつ移り変わる
-   確認したいときは URL に ?sky=0.5 のように付けると（0 が夕暮れ　1 が夜）その空で表示される */
-const SKY_FROM = '2026-10-17T15:00:00+09:00';
-const SKY_TO = '2026-10-17T19:30:00+09:00';
 
 /* =========================================================
    夜空と夕焼けの雲
@@ -661,7 +634,7 @@ const Sky = (function () {
     cv.style.height = H + 'px';
     cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     stars = [];
-    var n = Math.round(W * H / 4400);   // もとからある星（少なめ）
+    var n = Math.round(W * H / 2200);
     for (var i = 0; i < n; i++) {
       var y = Math.pow(Math.random(), 1.3) * H;
       stars.push({ x: rand(0, W), y: y, r: Math.random() < 0.05 ? rand(1.1, 1.6) : rand(0.3, 0.95),
@@ -692,12 +665,11 @@ const Sky = (function () {
     for (var i = 0; i < stars.length; i++) {
       var s = stars[i];
       var a = reduce ? 0.8 : 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(s.ph + t / 1000 * s.sp));
-      a *= (1 - (s.y / H) * 0.5) * starBoost;
+      a *= 1 - (s.y / H) * 0.5;
       ctx.globalAlpha = a;
       ctx.fillStyle = s.warm ? '#FFE6B8' : '#EEF3FF';
       ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.29); ctx.fill();
     }
-    drawShared(t);
     ctx.globalAlpha = 1;
     comet(t, sy);
     for (var k = meteors.length - 1; k >= 0; k--) {
@@ -726,7 +698,6 @@ const Sky = (function () {
     var w = window.innerWidth, h = Math.max(window.innerHeight, (window.screen && screen.height) || 0);
     if (!force && w === W && h <= H) return;
     build();
-    if (typeof layoutShared === 'function') layoutShared();
     if (reduce) draw(0);
   }
   function start() { refresh(false); drawClouds(); }
@@ -736,107 +707,7 @@ const Sky = (function () {
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(start);
   if (!reduce) requestAnimationFrame(tick);
   else window.addEventListener('scroll', function () { draw(0); }, { passive: true });
-  /* ---- シェアされた写真の数だけ灯る星 ----
-     何番目の星がどこに灯るかは番号から決まるので　開き直しても同じ位置に同じ星が出る */
-  var shared = [], sharedCount = 0, starBoost = 1;
-  function seeded(i) {
-    var s = (i + 1) * 2654435761 % 4294967296;
-    return function () { s = (s * 1664525 + 1013904223) % 4294967296; return s / 4294967296; };
-  }
-  function sharedMax() { return Math.round(W * H / 1000); }
-  function makeShared(i, born) {
-    var r = seeded(i);
-    return { x: r() * W, y: Math.pow(r(), 1.2) * H * 0.9, r: 0.8 + r() * 0.9,
-      ph: r() * 6.28, sp: 0.6 + r() * 1.4, gold: r() < 0.7, born: born };
-  }
-  function layoutShared() {
-    var n = Math.min(sharedCount, sharedMax());
-    shared = [];
-    for (var i = 0; i < n; i++) shared.push(makeShared(i, -1e9));
-  }
-  function drawShared(t) {
-    if (!shared) return;
-    var now = performance.now();
-    for (var i = 0; i < shared.length; i++) {
-      var s = shared[i];
-      var age = (now - s.born) / 1000;
-      if (age < 0) continue;
-      var fade = Math.min(1, age / 1.6);
-      var a = (reduce ? 0.95 : 0.65 + 0.35 * (0.5 + 0.5 * Math.sin(s.ph + t / 1000 * s.sp))) * fade;
-      ctx.globalAlpha = a;
-      ctx.fillStyle = s.gold ? '#FFE3A6' : '#F4F6FF';
-      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, 6.29); ctx.fill();
-      // 灯った直後は少しきらめく
-      if (age < 2.4) {
-        var k = 1 - age / 2.4, len = 3 + 9 * k;
-        ctx.globalAlpha = 0.9 * k * fade;
-        ctx.strokeStyle = '#FFF1CC'; ctx.lineWidth = 0.8;
-        ctx.beginPath();
-        ctx.moveTo(s.x - len, s.y); ctx.lineTo(s.x + len, s.y);
-        ctx.moveTo(s.x, s.y - len); ctx.lineTo(s.x, s.y + len);
-        ctx.stroke();
-      }
-    }
-  }
-  function setShared(n, animate) {
-    n = Math.max(0, n | 0);
-    var before = shared.length;
-    sharedCount = n;
-    try { localStorage.setItem('motion.stars', String(n)); } catch (_) {}
-    var max = sharedMax(), target = Math.min(n, max), now = performance.now();
-    if (target < before) shared.length = target;
-    // 新しい星はひとつずつ順に灯す（たくさんのときも4秒ほどで灯りきる）
-    var gap = Math.min(180, 4000 / Math.max(1, target - before));
-    for (var i = before; i < target; i++) {
-      shared.push(makeShared(i, animate === false ? -1e9 : now + (i - before) * gap));
-    }
-    if (reduce || calm) draw(performance.now());
-  }
-
-  /* ---- 当日の時刻で　夕暮れから夜へ ---- */
-  var DUSK = { night: '#060A22', deep: '#0D1540', blue: '#1C2A6E', violet: '#3E3A86', dusk: '#6A4C98', rose: '#E38C8C', amber: '#FBC27A', h2: '#A45E9A', h5: '#FFD9A0' };
-  var TWILIGHT = { night: '#040720', deep: '#0A1134', blue: '#16205A', violet: '#2E2A70', dusk: '#4E3A82', rose: '#9A5C88', amber: '#CF7C76', h2: '#6E4588', h5: '#E8A07E' };
-  var NIGHT = { night: '#02040E', deep: '#060B24', blue: '#0D1640', violet: '#18194A', dusk: '#221F54', rose: '#322A5E', amber: '#433868', h2: '#29225A', h5: '#56467A' };
-  function mix(a, b, k) {
-    var pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
-    var c = [16, 8, 0].map(function (sh) { var x = (pa >> sh) & 255, y = (pb >> sh) & 255; return Math.round(x + (y - x) * k); });
-    return '#' + c.map(function (v) { return ('0' + v.toString(16)).slice(-2); }).join('');
-  }
-  function phaseNow() {
-    var m = location.search.match(/[?&]sky=([\d.]+)/);
-    if (m) return Math.max(0, Math.min(1, parseFloat(m[1])));
-    var from = new Date(SKY_FROM).getTime(), to = new Date(SKY_TO).getTime(), now = Date.now();
-    if (now <= from) return 0;
-    if (now >= to) return 1;
-    return (now - from) / (to - from);
-  }
-  function applyPhase() {
-    var k = phaseNow();
-    var e = k * k * (3 - 2 * k);   // なめらかに
-    var root = document.documentElement.style;
-    // 夕暮れ → 薄暮（ばら色と藍） → 夜　の3段階でなめらかに
-    Object.keys(DUSK).forEach(function (key) {
-      var c = e < 0.5 ? mix(DUSK[key], TWILIGHT[key], e * 2) : mix(TWILIGHT[key], NIGHT[key], (e - 0.5) * 2);
-      root.setProperty('--' + key, c);
-    });
-    cc.style.opacity = String(1 - 0.7 * e);
-    starBoost = 0.75 + 0.45 * e;   // 夜になるほど星が明るい
-    if (reduce) draw(0);
-  }
-  applyPhase();
-  setInterval(applyPhase, 60000);
-
-  var cached = 0;
-  try { cached = parseInt(localStorage.getItem('motion.stars') || '0', 10) || 0; } catch (_) {}
-  sharedCount = cached; layoutShared();
-
-  return {
-    refresh: refresh,
-    calm: function (on) { calm = !!on; },
-    setShared: setShared,
-    addShared: function (n) { setShared(sharedCount + n); },
-    shared: function () { return sharedCount; },
-  };
+  return { refresh: refresh, calm: function (on) { calm = !!on; } };
 })();
 
 /* =========================================================
@@ -1430,30 +1301,18 @@ const Upload = (function () {
     : left < 60 ? 'あと約' + Math.max(5, Math.round(left / 5) * 5) + '秒'
     : 'あと約' + Math.round(left / 60) + '分';
 
-  /* 画面中央の砂時計
-     上の砂の塊を下へずらすと（上の器で切り抜かれて）上の砂が減って見え
-     下の砂の塊を上へずらすと　下に砂がたまって見える */
-  function setHourglass(f) {
-    f = Math.max(0, Math.min(1, f));
-    $('hgTopSand').style.transform = 'translateY(' + (42 * f).toFixed(1) + 'px)';
-    $('hgBottomSand').style.transform = 'translateY(' + (50 * (1 - f)).toFixed(1) + 'px)';
-    const top = 120 - 50 * f;
-    $('hgStream').setAttribute('y2', top.toFixed(1));
-    $('hgStream').classList.toggle('off', f >= 0.999);
-  }
-
   /* 画面中央のゲージ */
   let shownFrac = 0;
   function showProgress(on) {
     $('upProgress').hidden = !on;
     document.body.classList.toggle('locked', on);
-    if (on) { shownFrac = 0; setHourglass(0); $('progPct').textContent = '0%'; $('progCount').textContent = ''; $('progLeft').textContent = 'シェアの準備をしています'; }
+    if (on) { shownFrac = 0; $('gaugeBar').style.width = '0%'; $('progCount').textContent = ''; $('progLeft').textContent = 'シェアの準備をしています'; }
   }
   function updateProgress() {
     if ($('upProgress').hidden) return;
     const st = progressState();
     shownFrac = Math.max(shownFrac, st.frac);    // 後戻りしない
-    setHourglass(shownFrac);
+    $('gaugeBar').style.width = (shownFrac * 100).toFixed(1) + '%';
     $('progPct').textContent = Math.floor(shownFrac * 100) + '%';
     $('progCount').textContent = st.done + ' / ' + st.total + '件';
     if (st.done > 0 || st.frac > 0) $('progLeft').textContent = leftText(st.left);
@@ -1517,8 +1376,6 @@ const Upload = (function () {
     const doneCount = items.filter(i => i.status === 'done').length;
     if (failed === 0 && doneCount > 0 && items.every(i => i.status === 'done')) {
       $('upDoneText').textContent = doneCount + '件　シェアしました';
-      $('upDoneStars').textContent = '夜空に星が' + doneCount + 'つ灯りました';
-      Sky.addShared(doneCount);
       show('upDone');
       Album.markStale();
     } else if (failed > 0 && !$('upError').textContent) {
@@ -1577,7 +1434,6 @@ const Ranking = (function () {
       (data.files || []).forEach(f => {
         const m = String(f.name || '').match(/^\d{8}-\d{6}_(.+?)_/);
         if (m) counts[m[1]] = (counts[m[1]] || 0) + 1;
-        else counts.__other = (counts.__other || 0) + 1;
       });
       pageToken = data.nextPageToken || null;
     } while (pageToken && ++pages < 20);
@@ -1586,7 +1442,7 @@ const Ranking = (function () {
 
   function render(counts) {
     const list = Object.keys(counts).map(n => ({ name: n, n: counts[n] }))
-      .filter(x => x.name && x.name !== '__other' && x.name !== 'ゲスト' && x.name !== 'テスト')
+      .filter(x => x.name && x.name !== 'ゲスト' && x.name !== 'テスト')
       .sort((a, b) => b.n - a.n || a.name.localeCompare(b.name, 'ja'));
     const box = $('rankList');
     box.textContent = '';
@@ -1608,14 +1464,11 @@ const Ranking = (function () {
     running = true;
     try {
       if (DRIVE_API_KEY && FOLDER_ID) {
-        const counts = await countAll();
-        render(counts);
-        Sky.setShared(Object.keys(counts).reduce((s, k) => s + counts[k], 0));
+        render(await countAll());
       } else if (complete) {
         const counts = {};
         loaded.forEach(p => { if (p.guest) counts[p.guest] = (counts[p.guest] || 0) + 1; });
         render(counts);
-        Sky.setShared(loaded.length);
       }
       lastAt = Date.now();
     } catch (e) {
