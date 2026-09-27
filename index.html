@@ -590,8 +590,8 @@ const Sky = (function () {
   var calm = false;   // 送信中などは描く回数を減らす
   function tick(t) {
     requestAnimationFrame(tick);
-    var interval = calm ? 100 : 33;   // 通常は毎秒30回　送信中は10回
-    if (t - lastDraw < interval) return;
+    if (calm) return;                 // 送信中は止める（スマホの力を送信に回す）
+    if (t - lastDraw < 33) return;    // 毎秒30回まで
     lastDraw = t;
     if (t > nextMeteor) {
       meteors.push({ x: rand(W * 0.3, W), y: rand(0, window.innerHeight * 0.5), dx: -rand(160, 260), dy: rand(60, 130), t0: t, dur: rand(700, 1000) });
@@ -750,8 +750,9 @@ const Upload = (function () {
   const DIRECT_CHUNK = 32 * 1024 * 1024;  // Drive に直接送るときの分割サイズ
   const MAX_RETRY = 4;
   // 小さい写真でも Drive 側の保存待ちが1枚3秒ほどあるので　たくさん同時に送って待ち時間を重ねる
-  const PARALLEL = 10;                    // 同時に送るファイル数
-  const BATCH = 10;                       // まとめて準備するファイル数
+  // Drive には1秒あたりに保存できる数の上限があり　多すぎると失敗が増える
+  const PARALLEL = 4;                     // 同時に送るファイル数
+  const BATCH = 8;                        // まとめて準備するファイル数
   let batchSupported = true;              // 古い GAS（initUploads なし）なら 1件ずつ準備する
   const DEBUG = /[?&]debug\b/.test(location.search);
 
@@ -809,39 +810,76 @@ const Upload = (function () {
   }
 
   /* ---- サムネイル ----
-     何十枚も選んだときに端末のメモリが足りなくならないよう
-     画面に近づいたものから順に画像を読み込む */
+     iPhone の写真を元の大きさのまま表示すると1枚で数十MBのメモリを使い
+     何十枚も並べると画面が描けなくなる
+     そこで1枚ずつ小さな画像（240px）に縮めてから表示し　元の画像はすぐ手放す */
+  const THUMB = 240;
+  const thumbQueue = [];
+  let thumbRunning = 0;
+
+  function shrink(item) {
+    return new Promise(resolve => {
+      const src = URL.createObjectURL(item.file);
+      const img = new Image();
+      img.decoding = 'async';
+      const finish = url => { URL.revokeObjectURL(src); img.removeAttribute('src'); resolve(url); };
+      img.onload = () => {
+        try {
+          const s = Math.min(img.naturalWidth, img.naturalHeight);
+          const c = document.createElement('canvas');
+          c.width = THUMB; c.height = THUMB;
+          c.getContext('2d').drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, THUMB, THUMB);
+          c.toBlob(b => { c.width = c.height = 0; finish(b ? URL.createObjectURL(b) : null); }, 'image/jpeg', 0.8);
+        } catch (_) { finish(null); }
+      };
+      img.onerror = () => finish(null);
+      img.src = src;
+    });
+  }
+
+  function pumpThumbs() {
+    while (thumbRunning < 2 && thumbQueue.length) {
+      const item = thumbQueue.shift();
+      thumbRunning++;
+      shrink(item).then(url => {
+        item.thumb = url || 'none';
+        (item.thumbWaiters || []).forEach(fn => fn());
+        item.thumbWaiters = [];
+        thumbRunning--;
+        pumpThumbs();
+      });
+    }
+  }
+
+  function requestThumb(item, apply) {
+    if (item.thumb) { apply(); return; }
+    (item.thumbWaiters = item.thumbWaiters || []).push(apply);
+    if (!item.thumbQueued) { item.thumbQueued = true; thumbQueue.push(item); pumpThumbs(); }
+  }
+
+  // 画面に近づいたものから順に縮小する
   const io = window.IntersectionObserver ? new IntersectionObserver(entries => {
     entries.forEach(e => {
       if (!e.isIntersecting) return;
       io.unobserve(e.target);
-      e.target.src = e.target.dataset.src;
+      if (e.target._load) e.target._load();
     });
-  }, { rootMargin: '400px 0px' }) : null;
-
-  function lazy(el, src) {
-    if (!io) { el.src = src; return; }
-    el.dataset.src = src;
-    io.observe(el);
-  }
+  }, { rootMargin: '300px 0px' }) : null;
 
   function makeThumb(item) {
     const f = item.file;
-    if (!item.url) item.url = URL.createObjectURL(f);
     const frag = document.createDocumentFragment();
     if (f.type.indexOf('video/') === 0) {
-      const v = document.createElement('video');
-      v.className = 'thumb';
-      v.muted = true; v.playsInline = true; v.preload = 'metadata';
-      v.setAttribute('playsinline', '');
-      lazy(v, item.url + '#t=0.1');
-      frag.appendChild(v);
+      frag.appendChild(span('動画', 'ph'));
       frag.appendChild(span('動画', 'vbadge'));
     } else if (f.type.indexOf('image/') === 0 || /\.(heic|heif)$/i.test(f.name)) {
       const img = document.createElement('img');
-      img.className = 'thumb'; img.alt = ''; img.decoding = 'async';
-      img.onerror = () => { img.replaceWith(span('写真', 'ph')); };
-      lazy(img, item.url);
+      img.className = 'thumb'; img.alt = '';
+      img._load = () => requestThumb(item, () => {
+        if (item.thumb === 'none') img.replaceWith(span('写真', 'ph'));
+        else img.src = item.thumb;
+      });
+      if (io) io.observe(img); else img._load();
       frag.appendChild(img);
     } else {
       frag.appendChild(span('ファイル', 'ph'));
@@ -880,7 +918,7 @@ const Upload = (function () {
 
   function remove(item) {
     item.el.remove();
-    if (item.url) URL.revokeObjectURL(item.url);
+    if (item.thumb && item.thumb !== 'none') URL.revokeObjectURL(item.thumb);
     items = items.filter(i => i !== item);
     refresh();
   }
@@ -962,9 +1000,9 @@ const Upload = (function () {
           } catch (_) { /* ヘッダーが読めなければ全部届いたとみなす */ }
           return resolve({ done: false, next: next });
         }
-        reject(new Error('送信に失敗しました（' + xhr.status + '）'));
+        reject(Object.assign(new Error('送信に失敗しました（' + xhr.status + '）'), { status: xhr.status }));
       };
-      xhr.onerror = () => reject(new Error('通信が切れました'));
+      xhr.onerror = () => reject(Object.assign(new Error('通信が切れました'), { status: 0 }));
       xhr.ontimeout = xhr.onerror;
       xhr.send(blob);
     });
@@ -990,6 +1028,22 @@ const Upload = (function () {
     item.session = null; item.sessionError = null; item.sessPromise = null; item.sessKey = null;
   }
 
+  /* GAS への準備の依頼は同時に2つまで（Drive に一度に頼みすぎると断られる） */
+  let prepRunning = 0;
+  const prepWaiting = [];
+  function limitPrep(fn) {
+    return new Promise((resolve, reject) => {
+      const run = () => {
+        prepRunning++;
+        fn().then(resolve, reject).finally(() => {
+          prepRunning--;
+          if (prepWaiting.length) prepWaiting.shift()();
+        });
+      };
+      if (prepRunning < 2) run(); else prepWaiting.push(run);
+    });
+  }
+
   function ensureSessions(list, who) {
     if (!batchSupported) return;
     const key = whoKey(who);
@@ -1000,8 +1054,9 @@ const Upload = (function () {
     });
     for (let i = 0; i < need.length; i += BATCH) {
       const b = need.slice(i, i + BATCH);
+      const p = limitPrep(() => {
       const t0 = performance.now();
-      const p = api('initUploads', Object.assign({
+      return api('initUploads', Object.assign({
         files: b.map(it => ({ name: it.file.name, size: it.file.size, mimeType: it.file.type || '' })),
       }, who)).then(r => {
         dlog('送り先の準備 ' + b.length + '件 ' + sec(performance.now() - t0));
@@ -1009,6 +1064,7 @@ const Upload = (function () {
       }).catch(e => {
         if (/リクエストが正しくありません/.test(errText(e))) { batchSupported = false; b.forEach(clearSession); return; }
         b.forEach(it => { if (it.sessKey === key) it.sessionError = e; });
+      });
       });
       b.forEach(it => { it.sessPromise = p; it.sessKey = key; });
     }
@@ -1050,13 +1106,23 @@ const Upload = (function () {
 
     ensureSessions([item], who);
     if (item.sessPromise) await item.sessPromise;
-    if (item.sessionError) throw item.sessionError;
     let session = item.session;
-    if (session && session.error) throw new Error(session.error);
-    if (!session) {
-      session = await api('initUpload', Object.assign({
-        name: file.name, size: file.size, mimeType: file.type || '',
-      }, who));
+    const hardError = e => /合言葉|受付|大きすぎ|空のファイル/.test(errText(e));
+    if (item.sessionError && hardError(item.sessionError)) throw item.sessionError;
+    if (session && session.error && hardError(new Error(session.error))) throw new Error(session.error);
+    // まとめ準備で失敗した写真は　少し待って1枚ずつ準備し直す
+    for (let k = 0; !session || session.error || item.sessionError; k++) {
+      if (k > 0 || item.sessionError || (session && session.error)) {
+        if (k >= 3) throw item.sessionError || new Error((session && session.error) || '準備できませんでした');
+        await sleep(1500 * Math.pow(2, k) + Math.random() * 1000);
+      }
+      item.sessionError = null;
+      try {
+        session = await api('initUpload', Object.assign({ name: file.name, size: file.size, mimeType: file.type || '' }, who));
+      } catch (e) {
+        if (hardError(e)) throw e;
+        item.sessionError = e; session = null;
+      }
     }
     const uploadId = session.uploadId, uploadUrl = session.uploadUrl;
     const t1 = performance.now();
@@ -1081,12 +1147,13 @@ const Upload = (function () {
           }
           break;
         } catch (e) {
-          if (direct && !directConfirmed) {
-            // この端末からは直接送れないので　中継に切り替えてすぐやり直す
+          if (direct && !directConfirmed && e.status === 0 && attempt === 0) {
+            // 最初の1枚が通信そのものに失敗した（CORS など）　この端末からは直接送れないので中継に切り替える
+            // サーバーからのエラー（混雑など）のときは切り替えずに　少し待ってやり直す
             mode = 'relay';
           } else {
             if (attempt >= MAX_RETRY) throw e;
-            await sleep(1500 * Math.pow(2, attempt));
+            await sleep(1500 * Math.pow(2, attempt) + Math.random() * 1000);
           }
           // どこまで届いたか確認してから再開
           try {
@@ -1136,6 +1203,10 @@ const Upload = (function () {
     busy = true;
     sendStart = performance.now();
     Sky.calm(true);
+    $('send').disabled = true;
+    $('send').textContent = '届けています';
+    $('pickInfo').textContent = '届ける準備をしています';
+    await new Promise(r => requestAnimationFrame(() => setTimeout(r, 0)));   // 表示を先に更新してから始める
     const ticker = setInterval(() => { if (busy) $('pickInfo').textContent = progressText(items.filter(i => i.status === 'done').length) + (DEBUG ? '　[' + mode + ']' : ''); }, 1000);
     $('upError').textContent = '';
     store('motion.guest', $('guest').value.trim());
@@ -1186,7 +1257,7 @@ const Upload = (function () {
   }
 
   function reset() {
-    items.forEach(i => { i.el.remove(); if (i.url) URL.revokeObjectURL(i.url); });
+    items.forEach(i => { i.el.remove(); if (i.thumb && i.thumb !== 'none') URL.revokeObjectURL(i.thumb); });
     items = [];
     $('upError').textContent = '';
     refresh();
