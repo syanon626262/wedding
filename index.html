@@ -595,7 +595,17 @@ function span(text, cls) {
 }
 
 /* Drive の公開ファイルのサムネイル */
-const thumbUrl = (id, w) => 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w' + w;
+/* Drive の公開ファイルの画像
+   lh3 は Google の画像配信サーバーから直接返るので速い　だめなら Drive のサムネイルに切り替える */
+const thumbUrl = (id, w) => 'https://lh3.googleusercontent.com/d/' + encodeURIComponent(id) + '=w' + w;
+const thumbUrlAlt = (id, w) => 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w' + w;
+function setThumb(img, id, w, onFail) {
+  img.onerror = () => {
+    img.onerror = onFail;
+    img.src = thumbUrlAlt(id, w);
+  };
+  img.src = thumbUrl(id, w);
+}
 
 /* =========================================================
    画面の切り替え
@@ -647,13 +657,21 @@ const Upload = (function () {
     ['upLoading', 'upClosed', 'upForm', 'upDone'].forEach(s => { $(s).hidden = s !== id; });
   }
 
-  async function enter() {
+  let configPromise = null;
+  let prepared = null;   // 確認画面を開いた時点で始めておいた送信準備
+
+  function enter() {
     if (config) return;
+    if (!configPromise) configPromise = loadConfig();
+  }
+
+  async function loadConfig() {
     show('upLoading');
     try {
       config = await api('config');
     } catch (e) {
       config = null;
+      configPromise = null;
       $('upClosedTitle').textContent = '読み込めませんでした';
       $('upClosedText').textContent = '時間をおいてもう一度開いてください';
       show('upClosed');
@@ -798,6 +816,7 @@ const Upload = (function () {
     });
     box.scrollTop = 0;
     box.classList.toggle('few', list.length < 4);
+    prepare(list);
     $('confirmHint').hidden = list.length <= 12;
     $('confirm').hidden = false;
     document.body.classList.add('locked');
@@ -861,11 +880,23 @@ const Upload = (function () {
         b.forEach(it => { it.sessionError = e; });
       });
     };
-    return item => {
+    const planner = item => {
       const k = Math.floor(list.indexOf(item) / BATCH);
       start(k); start(k + 1); start(k + 2);
       return promises[k] || Promise.resolve();
     };
+    planner.warm = () => { start(0); start(1); };
+    return planner;
+  }
+
+  const currentWho = () => ({ guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin });
+
+  /* 確認画面を読んでいる間に　最初の送信先を準備しておく */
+  function prepare(list) {
+    const who = currentWho();
+    list.forEach(i => { i.session = null; i.sessionError = null; });
+    prepared = { key: JSON.stringify(who), list: list.slice(), who: who, planner: sessionPlanner(list.slice(), who) };
+    prepared.planner.warm();
   }
 
   function dlog(line) {
@@ -956,9 +987,19 @@ const Upload = (function () {
     let failed = 0;
     let stop = false;
     const queue = sendable();
-    queue.forEach(i => { i.status = 'wait'; i.progress = 0; i.session = null; i.sessionError = null; });
-    const who = { guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin };
-    const planner = sessionPlanner(queue.slice(), who);
+    let who = currentWho();
+    let planner;
+    const reuse = prepared && prepared.key === JSON.stringify(who) &&
+      prepared.list.length === queue.length && prepared.list.every((it, i) => it === queue[i]);
+    if (reuse) {
+      who = prepared.who;
+      planner = prepared.planner;
+      queue.forEach(i => { i.status = 'wait'; i.progress = 0; });
+    } else {
+      queue.forEach(i => { i.status = 'wait'; i.progress = 0; i.session = null; i.sessionError = null; });
+      planner = sessionPlanner(queue.slice(), who);
+    }
+    prepared = null;
     const tStart = performance.now();
     dlog('--- ' + queue.length + '件　合計 ' + mb(queue.reduce((s, i) => s + i.file.size, 0)) + ' ---');
     refresh();
@@ -1016,7 +1057,7 @@ const Upload = (function () {
   window.addEventListener('beforeunload', e => { if (busy) { e.preventDefault(); e.returnValue = ''; } });
   $('guest').value = store('motion.guest') || '';
 
-  return { enter: enter, isBusy: () => busy };
+  return { enter: enter, prefetch: enter, isBusy: () => busy };
 })();
 
 /* =========================================================
@@ -1024,19 +1065,23 @@ const Upload = (function () {
    ========================================================= */
 const Album = (function () {
   let photos = [];
+  let ids = new Set();
   let next = null;
   let loading = false;
-  let loaded = false;
-  let stale = false;
+  let loaded = false;       // 一覧を一度でも表示したか
+  let stale = false;        // 写真を送った直後など　GAS のキャッシュを使わず最新を取りたいとき
+  let lastFetch = 0;
   let gen = 0;
+  const CACHE_KEY = 'motion.album';
 
   function setState(text) { $('albumState').textContent = text || ''; }
 
   function updateCount() {
     $('albumCount').textContent = photos.length ? photos.length + (next ? '件以上' : '件') : '';
+    $('albumEmpty').hidden = !loaded || photos.length > 0;
   }
 
-  function addTile(p, index) {
+  function makeTile(p) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'tile';
@@ -1044,55 +1089,135 @@ const Album = (function () {
     const img = document.createElement('img');
     img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
     img.onload = () => img.classList.add('ok');
-    img.onerror = () => { img.remove(); b.insertBefore(span(p.type === 'video' ? '動画' : '準備中', 'ph'), b.firstChild); };
-    img.src = thumbUrl(p.id, 400);
+    setThumb(img, p.id, 400, () => { img.remove(); b.insertBefore(span(p.type === 'video' ? '動画' : '準備中', 'ph'), b.firstChild); });
     b.appendChild(img);
     if (p.type === 'video') b.appendChild(span('動画', 'vbadge'));
-    b.onclick = () => Viewer.open(index);
-    $('album').appendChild(b);
+    b.onclick = () => Viewer.open(photos.findIndex(x => x.id === p.id));
+    return b;
   }
 
-  async function load(reset) {
+  /* 一覧の末尾に足す */
+  function append(list) {
+    const frag = document.createDocumentFragment();
+    list.forEach(p => {
+      if (ids.has(p.id)) return;
+      ids.add(p.id); photos.push(p); frag.appendChild(makeTile(p));
+    });
+    $('album').appendChild(frag);
+  }
+
+  /* 新しく届いたものを先頭に足す */
+  function prepend(list) {
+    const fresh = list.filter(p => !ids.has(p.id));
+    if (!fresh.length) return;
+    const frag = document.createDocumentFragment();
+    fresh.forEach(p => { ids.add(p.id); frag.appendChild(makeTile(p)); });
+    photos = fresh.concat(photos);
+    $('album').insertBefore(frag, $('album').firstChild);
+  }
+
+  function saveCache(items) {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ at: Date.now(), items: items.slice(0, 60) })); } catch (_) { /* 保存できなくても動く */ }
+  }
+
+  /* 前回見た一覧があれば　通信を待たずにすぐ出す */
+  function restoreCache() {
+    try {
+      const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      if (c && Array.isArray(c.items) && c.items.length) {
+        append(c.items);
+        next = null;
+        loaded = true;
+        updateCount();
+      }
+    } catch (_) { /* 読めなければ普通に取得する */ }
+  }
+
+  /* 最初のページを取り直す　表示中の一覧は消さずに新しいものだけ足す */
+  async function refreshTop() {
     if (loading) return;
-    if (!reset && !next) return;
     loading = true;
     const my = ++gen;
-    const fresh = reset && stale;
-    setState('読み込んでいます');
+    if (!photos.length) setState('読み込んでいます');
     try {
-      const r = await api('list', reset ? { fresh: fresh } : { pageToken: next });
+      const r = await api('list', { fresh: stale });
       if (my !== gen) return;
-      if (reset) { photos = []; $('album').textContent = ''; stale = false; }
-      r.items.forEach(p => { photos.push(p); addTile(p, photos.length - 1); });
-      next = r.next;
+      stale = false;
+      lastFetch = Date.now();
+      if (!loaded || !photos.length) {
+        append(r.items);
+        next = r.next;
+      } else {
+        prepend(r.items);
+        if (!next) next = r.next;
+      }
       loaded = true;
-      $('albumEmpty').hidden = photos.length > 0;
+      saveCache(r.items);
       updateCount();
       setState('');
     } catch (e) {
-      setState(reset && !photos.length ? '写真を読み込めませんでした　時間をおいてもう一度お試しください' : '読み込めませんでした');
+      setState(photos.length ? '' : '写真を読み込めませんでした　時間をおいてもう一度お試しください');
     } finally {
       if (my === gen) loading = false;
     }
   }
 
-  function enter() { load(true); }
+  async function loadMore() {
+    if (loading || !next) return;
+    loading = true;
+    const my = ++gen;
+    setState('読み込んでいます');
+    try {
+      const r = await api('list', { pageToken: next });
+      if (my !== gen) return;
+      append(r.items);
+      next = r.next;
+      updateCount();
+      setState('');
+    } catch (e) {
+      setState('読み込めませんでした');
+    } finally {
+      if (my === gen) loading = false;
+    }
+  }
 
-  $('reload').addEventListener('click', () => { stale = true; load(true); });
+  /* 最初の数枚のサムネイルを先に読み込んでおく */
+  function warmThumbs() {
+    photos.slice(0, 12).forEach(p => { const i = new Image(); setThumb(i, p.id, 400, () => {}); });
+  }
+
+  function enter() {
+    updateCount();
+    // 直前に取ったばかりなら取り直さない
+    if (!stale && loaded && Date.now() - lastFetch < 15000) return;
+    refreshTop();
+  }
+
+  /* ページを開いたら裏で一覧を取っておく */
+  async function prefetch() {
+    if (lastFetch || loading) return;
+    await refreshTop();
+    warmThumbs();
+  }
+
+  restoreCache();
+
+  $('reload').addEventListener('click', () => { stale = true; refreshTop(); });
 
   if (window.IntersectionObserver) {
     new IntersectionObserver(entries => {
-      if (entries.some(e => e.isIntersecting) && loaded && current === 'photos') load(false);
+      if (entries.some(e => e.isIntersecting) && loaded && current === 'photos') loadMore();
     }, { rootMargin: '600px 0px' }).observe($('albumEnd'));
   }
 
   return {
     enter: enter,
+    prefetch: prefetch,
     markStale: () => { stale = true; },
     get: i => photos[i],
     size: () => photos.length,
     hasMore: () => !!next,
-    more: () => load(false),
+    more: loadMore,
   };
 })();
 
@@ -1117,10 +1242,10 @@ const Viewer = (function () {
     } else {
       const img = document.createElement('img');
       img.alt = '';
-      img.src = thumbUrl(p.id, 400);            // まず小さい画像をすぐ出す
+      setThumb(img, p.id, 400, () => {});        // まず小さい画像をすぐ出す
       const big = new Image();
-      big.onload = () => { if (Album.get(index) === p) img.src = big.src; };
-      big.src = thumbUrl(p.id, 2000);
+      big.onload = () => { if (Album.get(index) === p) { img.onerror = null; img.src = big.src; } };
+      setThumb(big, p.id, 2000, () => {});
       stage.appendChild(img);
     }
     $('viewerFrom').textContent = p.guest ? p.guest + 'さんより' : '';
@@ -1171,6 +1296,10 @@ const Viewer = (function () {
 
 /* 最初の画面 */
 go(location.hash.slice(1) || 'guide');
+
+/* 表示が落ち着いたら　裏で GAS を起こして一覧と受付状況を取っておく
+   タブを開いたときにすぐ表示できるようにするため */
+setTimeout(() => { Upload.prefetch(); Album.prefetch(); }, 600);
 </script>
 </body>
 </html>
