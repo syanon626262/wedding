@@ -754,7 +754,6 @@ const Upload = (function () {
   }
 
   let configPromise = null;
-  let prepared = null;   // 確認画面を開いた時点で始めておいた送信準備
 
   function enter() {
     if (config) return;
@@ -855,6 +854,7 @@ const Upload = (function () {
     }
     $('upError').textContent = '';
     refresh();
+    schedulePrepare(0);
   }
 
   function remove(item) {
@@ -958,41 +958,57 @@ const Upload = (function () {
     });
   }
 
-  /* 送信先の準備を BATCH 件ずつまとめて GAS に頼む（1件ずつ頼むより速い）
-     いま送っているまとまりの次も先回りして準備しておく */
-  function sessionPlanner(list, who) {
-    const batches = [];
-    for (let i = 0; i < list.length; i += BATCH) batches.push(list.slice(i, i + BATCH));
-    const promises = [];
-    const start = k => {
-      if (!batchSupported || k >= batches.length || promises[k]) return;
-      const b = batches[k];
-      promises[k] = api('initUploads', Object.assign({
-        files: b.map(i => ({ name: i.file.name, size: i.file.size, mimeType: i.file.type || '' })),
-      }, who)).then(r => {
-        b.forEach((it, j) => { it.session = r.sessions[j]; });
-      }).catch(e => {
-        if (/リクエストが正しくありません/.test(errText(e))) { batchSupported = false; return; }
-        b.forEach(it => { it.sessionError = e; });
-      });
-    };
-    const planner = item => {
-      const k = Math.floor(list.indexOf(item) / BATCH);
-      start(k); start(k + 1); start(k + 2);
-      return promises[k] || Promise.resolve();
-    };
-    planner.warm = () => { start(0); start(1); };
-    return planner;
+  /* ---- 送り先の準備 ----
+     写真を選んだ時点で　裏で GAS に送り先の準備を頼んでおく
+     GAS の返事が遅くても　「届ける」を押すころには終わっているようにするため
+     名前や合言葉が変わったら準備し直す */
+  const currentWho = () => ({ guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin });
+  const whoKey = who => JSON.stringify(who);
+
+  function clearSession(item) {
+    item.session = null; item.sessionError = null; item.sessPromise = null; item.sessKey = null;
   }
 
-  const currentWho = () => ({ guestName: $('guest').value.trim(), passcode: $('pass').value.trim(), origin: location.origin });
+  function ensureSessions(list, who) {
+    if (!batchSupported) return;
+    const key = whoKey(who);
+    const need = [];
+    list.forEach(it => {
+      if (it.sessKey !== key) clearSession(it);
+      if (!it.sessPromise) need.push(it);
+    });
+    for (let i = 0; i < need.length; i += BATCH) {
+      const b = need.slice(i, i + BATCH);
+      const t0 = performance.now();
+      const p = api('initUploads', Object.assign({
+        files: b.map(it => ({ name: it.file.name, size: it.file.size, mimeType: it.file.type || '' })),
+      }, who)).then(r => {
+        dlog('送り先の準備 ' + b.length + '件 ' + sec(performance.now() - t0));
+        b.forEach((it, j) => { if (it.sessKey === key) it.session = r.sessions[j]; });
+      }).catch(e => {
+        if (/リクエストが正しくありません/.test(errText(e))) { batchSupported = false; b.forEach(clearSession); return; }
+        b.forEach(it => { if (it.sessKey === key) it.sessionError = e; });
+      });
+      b.forEach(it => { it.sessPromise = p; it.sessKey = key; });
+    }
+  }
 
-  /* 確認画面を読んでいる間に　最初の送信先を準備しておく */
+  let prepTimer = null;
+  function schedulePrepare(delay) {
+    clearTimeout(prepTimer);
+    prepTimer = setTimeout(() => {
+      if (busy || !config || config.status !== 'open') return;
+      const who = currentWho();
+      if (!who.guestName) return;
+      if (config.needsPasscode && !who.passcode) return;
+      const list = sendable().filter(i => i.status === 'wait');
+      if (list.length) ensureSessions(list, who);
+    }, delay);
+  }
+
   function prepare(list) {
     const who = currentWho();
-    list.forEach(i => { i.session = null; i.sessionError = null; });
-    prepared = { key: JSON.stringify(who), list: list.slice(), who: who, planner: sessionPlanner(list.slice(), who) };
-    prepared.planner.warm();
+    ensureSessions(list.filter(i => i.status === 'wait'), who);
   }
 
   function dlog(line) {
@@ -1004,14 +1020,15 @@ const Upload = (function () {
   const mb = n => (n / 1024 / 1024).toFixed(1) + 'MB';
   const sec = ms => (ms / 1000).toFixed(1) + 's';
 
-  async function uploadOne(item, planner, who) {
+  async function uploadOne(item, who) {
     const file = item.file;
     item.status = 'up';
     item.progress = 0;
     paint(item);
     const t0 = performance.now();
 
-    await planner(item);
+    ensureSessions([item], who);
+    if (item.sessPromise) await item.sessPromise;
     if (item.sessionError) throw item.sessionError;
     let session = item.session;
     if (session && session.error) throw new Error(session.error);
@@ -1083,19 +1100,10 @@ const Upload = (function () {
     let failed = 0;
     let stop = false;
     const queue = sendable();
-    let who = currentWho();
-    let planner;
-    const reuse = prepared && prepared.key === JSON.stringify(who) &&
-      prepared.list.length === queue.length && prepared.list.every((it, i) => it === queue[i]);
-    if (reuse) {
-      who = prepared.who;
-      planner = prepared.planner;
-      queue.forEach(i => { i.status = 'wait'; i.progress = 0; });
-    } else {
-      queue.forEach(i => { i.status = 'wait'; i.progress = 0; i.session = null; i.sessionError = null; });
-      planner = sessionPlanner(queue.slice(), who);
-    }
-    prepared = null;
+    const who = currentWho();
+    // 前回失敗したものは送り先を作り直す
+    queue.forEach(i => { if (i.status === 'err') clearSession(i); i.status = 'wait'; i.progress = 0; });
+    ensureSessions(queue, who);
     const tStart = performance.now();
     dlog('--- ' + queue.length + '件　合計 ' + mb(queue.reduce((s, i) => s + i.file.size, 0)) + ' ---');
     refresh();
@@ -1104,7 +1112,7 @@ const Upload = (function () {
       while (queue.length && !stop) {
         const item = queue.shift();
         try {
-          await uploadOne(item, planner, who);
+          await uploadOne(item, who);
         } catch (e) {
           failed++;
           item.status = 'err';
@@ -1143,8 +1151,8 @@ const Upload = (function () {
 
   /* ---- 初期化 ---- */
   $('fileInput').addEventListener('change', e => { addFiles(e.target.files); e.target.value = ''; });
-  $('guest').addEventListener('input', refresh);
-  $('pass').addEventListener('input', refresh);
+  $('guest').addEventListener('input', () => { refresh(); schedulePrepare(900); });
+  $('pass').addEventListener('input', () => { refresh(); schedulePrepare(900); });
   $('send').addEventListener('click', openConfirm);
   $('confirmOk').addEventListener('click', () => { closeConfirm(); sendAll(); });
   $('confirmCancel').addEventListener('click', closeConfirm);
