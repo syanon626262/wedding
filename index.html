@@ -186,10 +186,13 @@
   .note { text-align: center; font-size: 12.5px; color: var(--ink-soft); margin: 14px 0 0; opacity: .85; }
 
   /* ---------- みんなの写真 ---------- */
-  .albumhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-  .albumhead .count { font-size: 13.5px; color: var(--ink-soft); }
+  .albumhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+  .albumhead .count { font-size: 13.5px; color: var(--ink-soft); white-space: nowrap; }
+  .albumhead .btn.small { white-space: nowrap; }
+  .btn.icononly { width: 34px; height: 34px; padding: 0; display: inline-grid; place-items: center; font-size: 17px; letter-spacing: 0; }
   .album { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-inline: -12px; }
   .tile, .tile img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
+  .tile img, .tile span { pointer-events: none; }
   .tile {
     position: relative; display: block; aspect-ratio: 1;
     padding: 0; border: 0; border-radius: 3px; overflow: hidden;
@@ -426,12 +429,12 @@
         <div class="albumhead" id="albumHead">
           <span class="count" id="albumCount"></span>
           <span class="headbtns">
-            <button class="btn line small" type="button" id="reload">新しい写真を見る</button>
+            <button class="btn line small icononly" type="button" id="reload" aria-label="新しい写真を見る" title="新しい写真を見る">↻</button>
             <button class="btn line small" type="button" id="selectStart">えらんで保存</button>
           </span>
         </div>
         <div class="albumhead" id="selectHead" hidden>
-          <span class="count">保存する写真をえらんでください</span>
+          <span class="count">保存する写真をタップ</span>
           <button class="btn line small" type="button" id="selectAll">すべてえらぶ</button>
         </div>
         <div class="album" id="album"></div>
@@ -1361,17 +1364,29 @@ const Album = (function () {
   }
 
   /* 長押し（0.45秒）を見分ける　指が動いたらスクロールとみなしてやめる */
+  /* 長押し（0.4秒）を見分ける
+     iPhone は写真を長押しするとプレビューのメニューを出して判定を打ち切るので
+     写真には指が触れないようにし（CSS で pointer-events: none）　タッチは touch イベントで直接見る
+     指が動いたらスクロールとみなしてやめる */
   function attachLongPress(el, fn) {
     let timer = null, sx = 0, sy = 0;
     const cancel = () => { clearTimeout(timer); timer = null; };
-    el.addEventListener('pointerdown', e => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      sx = e.clientX; sy = e.clientY;
+    const begin = (x, y) => {
+      sx = x; sy = y;
       cancel();
-      timer = setTimeout(() => { timer = null; fn(); }, 450);
-    });
-    el.addEventListener('pointermove', e => { if (timer && Math.hypot(e.clientX - sx, e.clientY - sy) > 10) cancel(); });
-    ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => el.addEventListener(n, cancel));
+      timer = setTimeout(() => { timer = null; el._lpAt = Date.now(); fn(); }, 400);
+    };
+    const move = (x, y) => { if (timer && Math.hypot(x - sx, y - sy) > 10) cancel(); };
+    if ('ontouchstart' in window) {
+      el.addEventListener('touchstart', e => { if (e.touches.length === 1) begin(e.touches[0].clientX, e.touches[0].clientY); else cancel(); }, { passive: true });
+      el.addEventListener('touchmove', e => move(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+      el.addEventListener('touchend', e => { if (el._lpAt && Date.now() - el._lpAt < 800) e.preventDefault(); cancel(); });
+      el.addEventListener('touchcancel', cancel);
+    } else {
+      el.addEventListener('mousedown', e => { if (e.button === 0) begin(e.clientX, e.clientY); });
+      el.addEventListener('mousemove', e => move(e.clientX, e.clientY));
+      ['mouseup', 'mouseleave'].forEach(n => el.addEventListener(n, cancel));
+    }
     el.addEventListener('contextmenu', e => e.preventDefault());
   }
 
@@ -1445,13 +1460,12 @@ const Album = (function () {
     b.appendChild(span('', 'check'));
     b.dataset.id = p.id;
     b.onclick = () => {
-      if (b._longPressed) { b._longPressed = false; return; }   // 長押しの直後のタップは無視
+      if (b._lpAt && Date.now() - b._lpAt < 800) return;   // 長押しの直後のタップは無視
       if (selecting) { toggle(p, b); return; }
       Viewer.open(photos.findIndex(x => x.id === p.id));
     };
     attachLongPress(b, () => {
       if (p.type === 'video') return;
-      b._longPressed = true;
       if (!selecting) setSelecting(true);
       if (!selected.has(p.id)) toggle(p, b);
       if (navigator.vibrate) navigator.vibrate(12);
