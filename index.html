@@ -472,7 +472,7 @@
     <main id="view-photos" hidden>
       <section class="section">
         <h2 class="title">みんなの写真</h2>
-        <p class="lead"><span class="l">皆さまがシェアしてくださった写真です</span><span class="l hint">長押しで選択できます</span></p>
+        <p class="lead"><span class="l">皆さまがシェアしてくださった写真です</span></p>
 
         <section class="ranking" id="ranking" aria-labelledby="rankTitle" hidden>
           <h3 id="rankTitle">シェア数ランキング</h3>
@@ -482,12 +482,12 @@
         <div class="albumhead" id="albumHead">
           <span class="count" id="albumCount"></span>
           <span class="headbtns">
-            <button class="btn line small" type="button" id="selectStart">えらんで保存</button>
+            <button class="btn line small" type="button" id="selectStart">選択</button>
           </span>
         </div>
         <div class="albumhead" id="selectHead" hidden>
           <span class="count">保存する写真をタップ</span>
-          <button class="btn line small" type="button" id="selectAll">すべてえらぶ</button>
+          <button class="btn line small" type="button" id="selectEnd">選択解除</button>
         </div>
         <div class="album" id="album"></div>
         <p class="albumstate" id="albumState"></p>
@@ -534,7 +534,7 @@
 <!-- えらんで保存のときの下のバー -->
 <div class="selectbar" id="selectBar" hidden>
   <span id="selectCount">0枚</span>
-  <button class="btn line small" type="button" id="selectCancel">やめる</button>
+  <button class="btn line small" type="button" id="selectCancel">選択解除</button>
   <button class="btn small" type="button" id="selectSave" disabled>保存する</button>
 </div>
 
@@ -1567,18 +1567,6 @@ const Album = (function () {
   function updateSelect() {
     $('selectCount').textContent = selected.size + '枚';
     $('selectSave').disabled = selected.size === 0;
-    const images = photos.filter(p => p.type !== 'video');
-    const all = images.length > 0 && images.slice(0, Saver.MAX).every(p => selected.has(p.id));
-    $('selectAll').textContent = all ? 'えらびなおす' : 'すべてえらぶ';
-  }
-
-  function selectAll() {
-    const images = photos.filter(p => p.type !== 'video').slice(0, Saver.MAX);
-    const all = images.length > 0 && images.every(p => selected.has(p.id));
-    selected.clear();
-    if (!all) images.forEach(p => selected.add(p.id));
-    document.querySelectorAll('#album .tile').forEach(el => el.classList.toggle('sel', selected.has(el.dataset.id)));
-    updateSelect();
   }
 
   $('selectStart').addEventListener('click', () => setSelecting(true));
@@ -1708,7 +1696,7 @@ const Album = (function () {
   }
   albumEl.addEventListener('contextmenu', e => e.preventDefault());
   $('selectCancel').addEventListener('click', () => setSelecting(false));
-  $('selectAll').addEventListener('click', selectAll);
+  $('selectEnd').addEventListener('click', () => setSelecting(false));
   $('selectSave').addEventListener('click', () => {
     const list = photos.filter(p => selected.has(p.id));
     if (list.length) Saver.start(list, () => setSelecting(false));
