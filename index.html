@@ -387,7 +387,7 @@
     <!-- ===== ご案内 ===== -->
     <main id="view-guide">
       <section class="letter">
-        <h1><span class="l">本日はお忙しいところ</span><span class="l">ご出席いただき</span><span class="l">誠にありがとうございます</span></h1>
+        <h1><span class="l">本日はご多用のところ</span><span class="l">ご出席いただき</span><span class="l">誠にありがとうございます</span></h1>
         <p><span class="l">皆さまと同じ時間を過ごせることを</span><span class="l">ふたりとも心から楽しみにしていました</span><span class="l">開式まで　ロビーでのひとときを</span><span class="l">お楽しみください</span></p>
         <p class="sign">Keisuke &amp; Misato</p>
       </section>
@@ -455,7 +455,7 @@
 
           <button class="btn" id="send" type="button" disabled>シェアする</button>
           <p class="error" id="upError"></p>
-          <p class="note">シェアが終わるまで　この画面を開いたままにしてください</p>
+          <p class="note">シェアが完了するまで　この画面を開いたままにしてください</p>
         </div>
 
         <div id="upDone" class="msg" hidden>
@@ -523,8 +523,8 @@
     <p>シェアした写真や動画は<br>すぐに「みんなの写真」に並びます</p>
     <p class="soft">式にご参加の皆さまが見られます</p>
     <div class="caution">
-      <p class="strong">一度シェアすると　ご自身では削除できません</p>
-      <p>どうしても削除したいときは<br>新郎新婦にご連絡ください<br>あとで対応いたします</p>
+      <p class="strong">一度シェアすると　ご自身では取り下げられません</p>
+      <p>どうしても取り下げたいときは<br>新郎新婦にご連絡ください<br>あとで対応いたします</p>
     </div>
     <button class="btn" type="button" id="confirmOk">シェアする</button>
     <button class="btn line" type="button" id="confirmCancel">えらびなおす</button>
@@ -545,7 +545,7 @@
     <p id="saverText"></p>
     <p class="soft" id="saverNote"></p>
     <button class="btn" type="button" id="saverGo" hidden></button>
-    <button class="btn line" type="button" id="saverClose">やめる</button>
+    <button class="btn line" type="button" id="saverClose">キャンセル</button>
   </div>
 </div>
 
@@ -557,7 +557,7 @@
     <div class="gauge"><i id="gaugeBar"></i></div>
     <p class="pcount" id="progCount"></p>
     <p class="pleft" id="progLeft"></p>
-    <p class="pnote">終わるまで<br>この画面を開いたままお待ちください</p>
+    <p class="pnote">完了するまで<br>この画面を開いたままお待ちください</p>
   </div>
 </div>
 
@@ -565,7 +565,7 @@
 <div class="viewer" id="viewer" role="dialog" aria-modal="true" aria-label="写真" hidden>
   <div class="top">
     <span class="from" id="viewerFrom"></span>
-    <button class="icon" type="button" id="viewerClose" aria-label="閉じる">×</button>
+    <button class="icon" type="button" id="viewerClose" aria-label="一覧にもどる">×</button>
   </div>
   <div class="stagewrap">
     <div class="stage" id="viewerStage"></div>
@@ -733,7 +733,7 @@ async function api(action, params, timeoutMs) {
     if (!data.ok) throw new Error(data.error || '通信できませんでした');
     return data.result;
   } catch (e) {
-    if (e && e.name === 'AbortError') throw new Error('時間がかかりすぎています　もう一度お試しください');
+    if (e && e.name === 'AbortError') throw new Error('時間がかかりすぎています　時間をおいてお試しください');
     throw e;
   } finally {
     if (timer) clearTimeout(timer);
@@ -742,7 +742,7 @@ async function api(action, params, timeoutMs) {
 
 function errText(e) {
   const msg = (e && e.message) ? e.message : String(e || '');
-  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return '通信が切れました';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) return '通信がつながりませんでした';
   return msg.replace(/^Error:\s*/, '') || 'シェアできませんでした';
 }
 
@@ -896,7 +896,7 @@ const Upload = (function () {
       $('upClosedText').textContent = '受付開始までしばらくお待ちください';
       show('upClosed');
     } else if (config.status === 'closed') {
-      $('upClosedTitle').textContent = '受付は終了しました';
+      $('upClosedTitle').textContent = '受付期間を過ぎております';
       $('upClosedText').textContent = 'たくさんの写真をありがとうございました';
       show('upClosed');
     } else {
@@ -998,7 +998,7 @@ const Upload = (function () {
       const state = document.createElement('i'); state.className = 'state';
       const rm = document.createElement('button');
       rm.className = 'rm'; rm.type = 'button'; rm.textContent = '×';
-      rm.setAttribute('aria-label', '取り消す');
+      rm.setAttribute('aria-label', 'この写真をえらばない');
       rm.onclick = () => remove(item);
       li.append(shade, bar, state, rm);
       item.el = li;
@@ -1038,7 +1038,7 @@ const Upload = (function () {
     const failed = items.filter(i => i.status === 'err').length;
 
     $('send').disabled = busy || !hasName || !hasPass || pending === 0;
-    $('send').textContent = busy ? 'シェアしています' : (failed && pending ? 'もう一度シェアする' : 'シェアする');
+    $('send').textContent = busy ? 'シェアしています' : (failed && pending ? 'あらためてシェアする' : 'シェアする');
     $('picker').classList.toggle('disabled', busy);
     $('guest').disabled = busy;
     $('pass').disabled = busy;
@@ -1095,9 +1095,9 @@ const Upload = (function () {
           } catch (_) { /* ヘッダーが読めなければ全部届いたとみなす */ }
           return resolve({ done: false, next: next });
         }
-        reject(Object.assign(new Error('送信に失敗しました（' + xhr.status + '）'), { status: xhr.status }));
+        reject(Object.assign(new Error('送信できませんでした（' + xhr.status + '）'), { status: xhr.status }));
       };
-      xhr.onerror = () => reject(Object.assign(new Error('通信が切れました'), { status: 0 }));
+      xhr.onerror = () => reject(Object.assign(new Error('通信がつながりませんでした'), { status: 0 }));
       xhr.ontimeout = xhr.onerror;
       xhr.send(blob);
     });
@@ -1379,7 +1379,7 @@ const Upload = (function () {
       show('upDone');
       Album.markStale();
     } else if (failed > 0 && !$('upError').textContent) {
-      $('upError').textContent = 'シェアできなかったものがあります　もう一度お試しください';
+      $('upError').textContent = 'シェアできなかったものがあります　あらためてシェアしてください';
     }
   }
 
@@ -1798,7 +1798,7 @@ const Album = (function () {
       updateCount();
       setState('');
     } catch (e) {
-      setState(photos.length ? '' : '写真を読み込めませんでした　時間をおいてもう一度お試しください');
+      setState(photos.length ? '' : '写真を読み込めませんでした　時間をおいてお試しください');
     } finally {
       if (my === gen) loading = false;
     }
@@ -1970,7 +1970,7 @@ const Saver = (function () {
     $('saverText').textContent = '0 / ' + list.length;
     $('saverNote').textContent = '';
     $('saverGo').hidden = true;
-    $('saverClose').textContent = 'やめる';
+    $('saverClose').textContent = 'キャンセル';
     open();
 
     const results = new Array(list.length);
@@ -2002,8 +2002,8 @@ const Saver = (function () {
     $('saverNote').textContent = failed ? failed + '枚は保存できませんでした' : '';
     if (!files.length) {
       $('saverTitle').textContent = '保存できませんでした';
-      $('saverText').textContent = '時間をおいてもう一度お試しください';
-      $('saverClose').textContent = 'とじる';
+      $('saverText').textContent = '時間をおいてお試しください';
+      $('saverClose').textContent = 'OK';
       return;
     }
     if (!canShareFiles(files)) { await download(); return; }   // iPhone 以外はそのままダウンロード
@@ -2047,7 +2047,7 @@ const Saver = (function () {
     $('saverTitle').textContent = '保存しました';
     $('saverText').textContent = '';
     $('saverGo').hidden = true;
-    $('saverClose').textContent = 'とじる';
+    $('saverClose').textContent = 'OK';
     if (onDone) { onDone(); onDone = null; }
   }
 
